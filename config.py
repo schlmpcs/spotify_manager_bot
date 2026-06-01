@@ -7,6 +7,7 @@ OpenRouter and grounding every message in the main bot's PostgreSQL database.
 """
 
 from typing import List, Optional
+from urllib.parse import quote
 
 from pydantic import SecretStr, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -94,16 +95,15 @@ class Settings(BaseSettings):
 
     @property
     def database_dsn(self) -> str:
-        parts = [
-            f"host={self.db_host}",
-            f"dbname={self.db_database}",
-            f"user={self.db_username.get_secret_value()}",
-            f"password={self.db_password.get_secret_value()}",
-            f"sslmode={self.db_ssl_mode}",
-        ]
-        if self.db_port:
-            parts.append(f"port={self.db_port}")
-        return " ".join(parts)
+        # asyncpg's `dsn=` expects a URI (not a libpq keyword string).
+        # URL-encode credentials so special chars in the password are safe.
+        user = quote(self.db_username.get_secret_value(), safe="")
+        password = quote(self.db_password.get_secret_value(), safe="")
+        port = self.db_port or 5432
+        dsn = f"postgresql://{user}:{password}@{self.db_host}:{port}/{self.db_database}"
+        if self.db_ssl_mode:
+            dsn += f"?sslmode={self.db_ssl_mode}"
+        return dsn
 
 
 settings = Settings()
