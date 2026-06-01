@@ -5,6 +5,7 @@ to the manager for one-tap approval when running in approve mode / on escalation
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 
 from aiogram import Bot
@@ -32,8 +33,13 @@ async def deliver(bot: Bot, conn_id: str, chat_id: int, text: str,
                 await asyncio.sleep(1.2)
             except TelegramBadRequest:
                 pass
+        # parse_mode=None: send the model's text verbatim. The bot's global
+        # default is HTML, which would render any Markdown the model emits
+        # (**bold**, lists) as literal characters — and could fail outright on
+        # a stray '<'/'&'. Customers should see plain, human-looking text.
         await bot.send_message(
-            chat_id=chat_id, text=text, business_connection_id=conn_id
+            chat_id=chat_id, text=text, business_connection_id=conn_id,
+            parse_mode=None,
         )
         return True, None
     except TelegramForbiddenError as e:
@@ -48,8 +54,10 @@ async def deliver(bot: Bot, conn_id: str, chat_id: int, text: str,
 
 def _preview(kind: str, chat_id: int, text: str, reason: str | None) -> str:
     head = "📨 Черновик ответа" if kind == "reply" else "📣 Напоминание об оплате"
-    note = f"\n⚠️ {reason}" if reason else ""
-    return f"{head} → клиент <code>{chat_id}</code>{note}\n\n{text}"
+    note = f"\n⚠️ {html.escape(reason)}" if reason else ""
+    # The preview itself is sent as HTML — escape the model text so '<'/'&'
+    # in a reply can't break the owner's draft card.
+    return f"{head} → клиент <code>{chat_id}</code>{note}\n\n{html.escape(text)}"
 
 
 async def send_or_approve(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
