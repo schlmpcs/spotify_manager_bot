@@ -41,6 +41,9 @@ async def main() -> None:
 
     me = await bot.get_me()
     logger.info("Started as @%s", me.username)
+    logger.info(
+        "LLM: %s via %s", ", ".join(settings.llm_models), settings.llm_base_url
+    )
     try:
         await bot.delete_webhook(drop_pending_updates=False)
         await dp.start_polling(
