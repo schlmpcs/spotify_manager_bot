@@ -18,9 +18,25 @@ _pool: Optional[asyncpg.Pool] = None
 
 
 async def connect() -> None:
+    """Open the read-only pool to the payment DB.
+
+    Non-fatal: if the DB is unreachable we log and leave `_pool` as None so the
+    bot still starts, polls, and accepts the Business/Chat-Automation
+    connection. Grounding queries return None/[] until the DB comes back —
+    call connect() again to retry.
+    """
     global _pool
-    _pool = await asyncpg.create_pool(dsn=settings.database_dsn, min_size=1, max_size=4)
-    logger.info("Connected to payment database")
+    try:
+        _pool = await asyncpg.create_pool(
+            dsn=settings.database_dsn, min_size=1, max_size=4
+        )
+        logger.info("Connected to payment database")
+    except Exception as e:  # noqa: BLE001 — degrade gracefully, don't crash the bot
+        _pool = None
+        logger.error(
+            "Could not connect to payment DB (%s) — starting WITHOUT grounding; "
+            "replies will lack payment data until the DB is reachable", e
+        )
 
 
 async def close() -> None:
