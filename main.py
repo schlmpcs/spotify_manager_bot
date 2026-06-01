@@ -17,6 +17,7 @@ from config import settings
 from bot.db import local, payments
 from bot.handlers import business, owner
 from bot.scheduler import start_scheduler
+from bot.utils.prompts import DEFAULT_STYLE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,11 @@ logger = logging.getLogger("manager_bot")
 async def main() -> None:
     await local.init()
     await payments.connect()
+
+    # Make the manager's service voice the active per-owner style on first run
+    # (non-destructive: a style set later via /style is preserved).
+    for owner_id in settings.owner_ids:
+        await local.seed_style_prompt(owner_id, DEFAULT_STYLE)
 
     bot = Bot(
         token=settings.bot_token.get_secret_value(),

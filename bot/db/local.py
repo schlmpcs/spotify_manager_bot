@@ -159,6 +159,21 @@ async def set_style_prompt(owner_id: int, prompt: str) -> None:
     await _db.commit()
 
 
+async def seed_style_prompt(owner_id: int, prompt: str) -> None:
+    """Set the owner's style ONLY if they haven't got one yet.
+
+    Lets us ship a sensible default voice as the *active* per-owner style on
+    first run, without clobbering a style the manager later set via /style.
+    """
+    await _db.execute(
+        """INSERT INTO owner_settings (owner_id, style_prompt) VALUES (?, ?)
+           ON CONFLICT(owner_id) DO UPDATE SET style_prompt=excluded.style_prompt
+           WHERE owner_settings.style_prompt IS NULL""",
+        (owner_id, prompt),
+    )
+    await _db.commit()
+
+
 async def set_auto_reply(owner_id: int, value: bool) -> None:
     await _db.execute(
         """INSERT INTO owner_settings (owner_id, auto_reply) VALUES (?, ?)
