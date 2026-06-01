@@ -114,8 +114,30 @@ async def on_business_message(message: Message, bot: Bot) -> None:
             pass
         return
 
+    # The model flags replies it couldn't ground ("I'll check with the manager").
+    # We still send the customer the reassurance, but always ping the manager so
+    # they actually follow up — the bot must not be the last word here.
+    wants_manager, reply = prompts.split_call_manager(reply)
+
+    if wants_manager:
+        reason = "клиент ждёт ответа от менеджера"
+    elif escalate:
+        reason = "чувствительная тема — проверьте"
+    else:
+        reason = None
+
     await send_or_approve(
         bot, owner_id, conn_id, customer_id, "reply", reply,
         auto=auto and not escalate,
-        reason="чувствительная тема — проверьте" if escalate else None,
+        reason=reason,
     )
+
+    if wants_manager:
+        try:
+            await bot.send_message(
+                owner_id,
+                f"🙋 Клиент <code>{customer_id}</code> задал вопрос, на который я не "
+                f"смог ответить — нужен ваш ответ.\n\n«{message.text}»",
+            )
+        except Exception:  # noqa: BLE001
+            pass

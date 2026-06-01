@@ -19,6 +19,15 @@ ESCALATION_TRIGGERS = (
     "refund", "scam", "already paid", "doesn't work", "not working",
 )
 
+# Marker the model prepends when it can't answer from the grounded data and the
+# question must go to a human. `business.py` strips it, sends the customer the
+# reassurance text, and pings the manager to follow up. Keep it distinctive so
+# it never collides with normal customer-facing prose.
+CALL_MANAGER_MARKER = "[[CALL_MANAGER]]"
+
+# Sent to the customer when the model emits the marker but no text of its own.
+CALL_MANAGER_FALLBACK = "Сейчас уточню у менеджера и вернусь к вам 🙏"
+
 DEFAULT_STYLE = (
     "Пиши неформально, по-дружески, кратко и по делу. Без канцелярита, "
     "без длинных абзацев, максимум пара коротких предложений. Можно лёгкий "
@@ -37,8 +46,14 @@ _SYSTEM = """Ты — менеджер сервиса Spotify Premium (семе�
 - Цены можно и нужно называть из блока «ТАРИФЫ» — даже если клиента нет в базе \
 (например, новый клиент спрашивает «сколько стоит»). Если не знаешь страну клиента — \
 коротко спроси (Казахстан или Россия) или назови оба варианта.
-- Если клиент хочет реквизиты для оплаты или спрашивает то, чего нет ни в тарифах, \
-ни в данных — коротко скажи, что сейчас уточнишь / пришлёшь, и не выдумывай.
+- НЕ ВЫДУМЫВАЙ ответы. Если ты не знаешь ответа, вопрос не про тарифы/оплату \
+(технические проблемы, особые просьбы, спорные ситуации) или нужных данных нет \
+ни в «ТАРИФАХ», ни в «ДАННЫХ КЛИЕНТА» — НЕ пытайся ответить и не гадай. Вместо \
+этого коротко и по-человечески скажи, что уточнишь у менеджера и вернёшься с \
+ответом, и поставь в САМОМ НАЧАЛЕ ответа маркер {marker} (клиент его не увидит). \
+Лучше честно передать вопрос менеджеру, чем придумать неверный ответ.
+- Это касается и реквизитов для оплаты, если их нет в данных: скажи, что \
+менеджер пришлёт реквизиты, и поставь маркер {marker}.
 - Никогда не обещай возвраты, скидки и не подтверждай оплату сам.
 - Пиши на языке клиента (русский по умолчанию, можно казахский/английский).
 - Коротко. Не пиши простыни. Без официального тона.
@@ -96,9 +111,17 @@ def _when_phrase(d: int | None, npd) -> str:
 def build_context_block(status: dict | None) -> str:
     """Render the grounded customer data the model is allowed to use."""
     if not status:
-        return ("ДАННЫЕ КЛИЕНТА: клиент не найден в базе платежей "
-                "(возможно, новый или ещё не оформил подписку). "
-                "Будь вежлив, уточни детали, ничего не выдумывай.")
+        bot = settings.purchase_bot_username
+        return (
+            "ДАННЫЕ КЛИЕНТА: клиент не найден в базе платежей — это НОВЫЙ "
+            "клиент, ещё не оформивший подписку.\n"
+            f"ЗАДАЧА: помоги ему подключиться. Оформление и оплата подписки "
+            f"происходят ТОЛЬКО через бота @{bot} — направь клиента туда "
+            f"(«чтобы подключиться, напишите боту @{bot}»). Цены можешь назвать "
+            "из блока «ТАРИФЫ». Сам реквизиты/ссылки не выдумывай и не проводи "
+            "оплату здесь — всё оформление на стороне бота. На вопросы отвечай "
+            "здесь."
+        )
     lines = ["ДАННЫЕ КЛИЕНТА:"]
     name = status.get("first_name") or "клиент"
     lines.append(f"- Имя: {name}")
@@ -121,12 +144,25 @@ def system_prompt(status: dict | None, style: str | None) -> str:
         style=(style or DEFAULT_STYLE).strip(),
         prices=price_list(),
         context=build_context_block(status),
+        marker=CALL_MANAGER_MARKER,
     )
 
 
 def needs_escalation(text: str) -> bool:
     low = text.lower()
     return any(trig in low for trig in ESCALATION_TRIGGERS)
+
+
+def split_call_manager(reply: str) -> tuple[bool, str]:
+    """Detect the manager-handoff marker in a model reply.
+
+    Returns ``(wants_manager, customer_text)`` — the marker stripped out, and a
+    sensible fallback substituted if the model emitted only the marker.
+    """
+    if CALL_MANAGER_MARKER not in reply:
+        return False, reply
+    clean = reply.replace(CALL_MANAGER_MARKER, "").strip()
+    return True, clean or CALL_MANAGER_FALLBACK
 
 
 def outreach_instruction(status: dict) -> str:

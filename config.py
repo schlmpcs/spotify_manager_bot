@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     support_username: str = Field(
         "sptfy_premium", description="Manager/support @username (no @)"
     )
+    purchase_bot_username: str = Field(
+        "sptfy_premium_bot",
+        description="@username (no @) of the payment bot where NEW customers "
+        "buy/connect a subscription. New prospects are directed here.",
+    )
 
     @property
     def database_dsn(self) -> str:
