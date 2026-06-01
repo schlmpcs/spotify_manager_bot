@@ -111,6 +111,10 @@ class Settings(BaseSettings):
         description="@username (no @) of the payment bot where NEW customers "
         "buy/connect a subscription. New prospects are directed here.",
     )
+    channel_url: str = Field(
+        "https://t.me/sptfykz",
+        description="Public channel link mentioned to new customers for details.",
+    )
 
     @property
     def database_dsn(self) -> str:
