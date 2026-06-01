@@ -2,8 +2,8 @@
 
 This is a *separate* bot from the main payment bot. It connects to the
 manager's personal Telegram account via Telegram Business / Chat Automation
-and answers / nudges customers on the manager's behalf, using a local LLM
-(Ollama) and grounding every message in the main bot's PostgreSQL database.
+and answers / nudges customers on the manager's behalf, using free LLMs via
+OpenRouter and grounding every message in the main bot's PostgreSQL database.
 """
 
 from typing import List, Optional
@@ -28,12 +28,22 @@ class Settings(BaseSettings):
         "(your manager account(s))",
     )
 
-    # --- Local LLM (Ollama) ---
-    llm_base_url: str = Field(
-        "http://localhost:11434", description="Ollama base URL"
+    # --- LLM (OpenRouter, free-model fallback chain) ---
+    openrouter_api_key: SecretStr = Field(
+        ..., description="OpenRouter API key (https://openrouter.ai/keys)"
     )
-    llm_model: str = Field(
-        "qwen2.5:7b-instruct", description="Ollama model tag"
+    openrouter_base_url: str = Field(
+        "https://openrouter.ai/api/v1", description="OpenRouter API base URL"
+    )
+    llm_models: List[str] = Field(
+        default_factory=lambda: [
+            "deepseek/deepseek-chat-v3.1:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "qwen/qwen-2.5-72b-instruct:free",
+            "google/gemini-2.0-flash-exp:free",
+            "mistralai/mistral-small-3.2-24b-instruct:free",
+        ],
+        description="Ordered free-model chain; on 429/error the next is tried",
     )
     llm_timeout: int = Field(60, description="LLM request timeout (s)")
     llm_max_tokens: int = Field(280, description="Max tokens per reply")

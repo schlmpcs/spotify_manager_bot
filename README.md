@@ -7,8 +7,8 @@ Telegram Business / Chat Automation). It:
   payment database (never invents prices or due dates).
 - **Texts overdue customers first** — because people ignore the bot and only pay
   after the manager messages them.
-- Runs on a **local LLM** (Ollama), so no per-message API cost and no data leaves
-  your machine.
+- Runs on **free LLMs via OpenRouter**, with an automatic fallback chain — if one
+  free model is rate-limited (429), it tries the next — so there's no API cost.
 
 It is a *separate* bot from the main payment bot. It only **reads** the payment
 bot's PostgreSQL database for grounding.
@@ -22,7 +22,7 @@ customer ──► manager's account ──► (Telegram Business) ──► thi
                                                               │
                               grounding ◄── PostgreSQL (payment bot, read-only)
                                                               │
-                                  draft ◄── Ollama (local LLM, e.g. Qwen2.5-7B)
+                                  draft ◄── OpenRouter (free-model fallback chain)
                                                               │
    reply / nudge ◄── sent AS the manager via business_connection_id
 ```
@@ -50,30 +50,26 @@ directly; the rest you'll see as drafts.
 - Talk to [@BotFather](https://t.me/BotFather) → **new bot** → copy the token.
 - (BotFather → your bot → **Bot Settings → Business Mode → Enable**.)
 
-### 2. Run the local LLM
-```bash
-# install https://ollama.com then:
-ollama pull qwen2.5:7b-instruct      # ~4.7 GB, fits your 8 GB GPU
-ollama serve                          # exposes http://localhost:11434
-```
-Qwen2.5-7B is the recommended model for your RTX 5060 8GB + 32GB DDR5 — strong
-Russian, fits fully in VRAM. Alternatives: `llama3.1:8b`, `gemma2:9b` (tighter).
+### 2. Get a free OpenRouter key
+- Sign up at [openrouter.ai](https://openrouter.ai) → **Keys** → create a key.
+- Free models (`...:free`) need no credit; they're just rate-limited, which the
+  fallback chain in `LLM_MODELS` handles by rotating to the next model on a 429.
 
 ### 3. Configure
 ```bash
-cp .env.example .env   # fill BOT_TOKEN, OWNER_IDS, and the payment-bot DB creds
+cp .env.example .env   # fill BOT_TOKEN, OWNER_IDS, OPENROUTER_API_KEY, DB creds
 ```
-Point `DB_*` at the **same PostgreSQL** the main payment bot uses.
+Point `DB_*` at the **same PostgreSQL** the main payment bot uses. `LLM_MODELS`
+already lists a sensible free chain — reorder or extend it as you like.
 
 ### 4. Run
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
-or with Docker (bundles Ollama):
+or with Docker:
 ```bash
 docker compose up -d --build
-docker compose exec ollama ollama pull qwen2.5:7b-instruct
 ```
 
 ### 5. Connect it to your manager account
@@ -101,7 +97,8 @@ messages"**. The bot will DM you a confirmation.
 | `PROACTIVE_MODE` | `auto` (send as manager), `approve` (one-tap), `off` |
 | `PROACTIVE_OVERDUE_DAYS` | Start nudging this many days overdue |
 | `PROACTIVE_COOLDOWN_DAYS` | Don't re-nudge within N days |
-| `LLM_MODEL` | Ollama model tag |
+| `OPENROUTER_API_KEY` | Your OpenRouter key (free tier is fine) |
+| `LLM_MODELS` | Ordered free-model chain; next is tried on a 429 |
 
 ---
 

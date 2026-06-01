@@ -3,31 +3,8 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    environment:
-      # Reach Ollama and the host Postgres from inside the container.
-      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
     volumes:
       - ./data:/app/data
-    depends_on:
-      - ollama
     extra_hosts:
+      # Reach the host Postgres from inside the container.
       - "host.docker.internal:host-gateway"
-
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    volumes:
-      - ollama_models:/root/.ollama
-    ports:
-      - "11434:11434"
-    # For GPU acceleration (NVIDIA), uncomment and ensure nvidia-container-toolkit is installed:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-
-volumes:
-  ollama_models:
