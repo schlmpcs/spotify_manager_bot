@@ -128,7 +128,8 @@ async def run_outreach(bot: Bot, *, force: bool = False) -> dict:
         next_stage = stage + 1            # 1 or 2
         text = prompts.NUDGE_TEXT[next_stage]
         ok = await send_or_approve(
-            bot, owner_id, conn_id, cid, "outreach", text, auto=auto
+            bot, owner_id, conn_id, cid, "outreach", text, auto=auto,
+            username=status.get("username"),
         )
         await local.set_outreach_state(cid, next_stage, cycle_due)
         await local.log_outreach(cid)

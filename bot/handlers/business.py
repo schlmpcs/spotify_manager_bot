@@ -143,6 +143,7 @@ async def on_business_message(message: Message, bot: Bot) -> None:
         bot, owner_id, conn_id, customer_id, "reply", reply,
         auto=auto and not escalate,
         reason=reason,
+        username=message.from_user.username if message.from_user else None,
     )
 
     if wants_manager:

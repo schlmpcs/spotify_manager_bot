@@ -65,22 +65,34 @@ def _is_parse_error(e: TelegramBadRequest) -> bool:
     return "can't parse entities" in (e.message or "").lower()
 
 
+def _customer_label(chat_id: int, username: str | None) -> str:
+    """How a customer is shown on the draft card. With a @username the manager
+    can tap straight through to the chat; otherwise fall back to the raw id."""
+    if username:
+        return f"@{username} (<code>{chat_id}</code>)"
+    return f"<code>{chat_id}</code>"
+
+
 def _preview(kind: str, chat_id: int, text: str, reason: str | None,
-             *, escape_text: bool) -> str:
+             *, escape_text: bool, username: str | None = None) -> str:
     head = "📨 Черновик ответа" if kind == "reply" else "📣 Напоминание об оплате"
     note = f"\n⚠️ {html.escape(reason)}" if reason else ""
     # Show the draft exactly as the customer would see it — render the model's
     # HTML. If it turns out to be malformed (parse error on send), we re-render
     # with the text escaped so the owner still sees the draft as raw text.
     body = html.escape(text) if escape_text else text
-    return f"{head} → клиент <code>{chat_id}</code>{note}\n\n{body}"
+    return f"{head} → клиент {_customer_label(chat_id, username)}{note}\n\n{body}"
 
 
 async def send_or_approve(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
                           kind: str, text: str, *, auto: bool,
-                          reason: str | None = None) -> bool:
+                          reason: str | None = None,
+                          username: str | None = None) -> bool:
     """auto=True → send immediately as the manager.
-    auto=False → store a draft and DM the manager Send/Edit/Skip buttons."""
+    auto=False → store a draft and DM the manager Send/Edit/Skip buttons.
+
+    `username` (the customer's Telegram @handle, when known) is shown on the
+    draft card so the manager can tap through to the chat."""
     if auto:
         ok, err = await deliver(bot, conn_id, chat_id, text)
         if ok:
@@ -95,7 +107,8 @@ async def send_or_approve(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
         try:
             await bot.send_message(
                 owner_id,
-                _preview(kind, chat_id, text, reason, escape_text=False),
+                _preview(kind, chat_id, text, reason, escape_text=False,
+                         username=username),
                 reply_markup=draft_kb(draft_id),
             )
         except TelegramBadRequest as e:
@@ -104,7 +117,8 @@ async def send_or_approve(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
             # Model emitted broken HTML — show it escaped so the card still sends.
             await bot.send_message(
                 owner_id,
-                _preview(kind, chat_id, text, reason, escape_text=True),
+                _preview(kind, chat_id, text, reason, escape_text=True,
+                         username=username),
                 reply_markup=draft_kb(draft_id),
             )
     except Exception:  # noqa: BLE001
