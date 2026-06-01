@@ -5,3 +5,8 @@ services:
     env_file: .env
     volumes:
       - ./data:/app/data
+    # Postgres runs on the host, listening on 127.0.0.1:5432. Sharing the host's
+    # network stack lets the bot reach it over loopback (DB_HOST=127.0.0.1) with
+    # no bridge/firewall hops. The bot is outbound-only (Telegram long-polling),
+    # so it exposes no ports of its own.
+    network_mode: host
