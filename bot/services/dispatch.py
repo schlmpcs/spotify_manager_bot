@@ -33,14 +33,22 @@ async def deliver(bot: Bot, conn_id: str, chat_id: int, text: str,
                 await asyncio.sleep(1.2)
             except TelegramBadRequest:
                 pass
-        # parse_mode=None: send the model's text verbatim. The bot's global
-        # default is HTML, which would render any Markdown the model emits
-        # (**bold**, lists) as literal characters — and could fail outright on
-        # a stray '<'/'&'. Customers should see plain, human-looking text.
-        await bot.send_message(
-            chat_id=chat_id, text=text, business_connection_id=conn_id,
-            parse_mode=None,
-        )
+        # The model is told to format with Telegram HTML (<b>, <i>, …), so we
+        # send under the bot's global HTML default. If it slips and emits a
+        # stray '<'/'&' or a broken tag, Telegram rejects the message with a
+        # parse error — fall back to sending the text verbatim as plain text so
+        # the customer still gets the reply.
+        try:
+            await bot.send_message(
+                chat_id=chat_id, text=text, business_connection_id=conn_id,
+            )
+        except TelegramBadRequest as e:
+            if not _is_parse_error(e):
+                raise
+            await bot.send_message(
+                chat_id=chat_id, text=text, business_connection_id=conn_id,
+                parse_mode=None,
+            )
         return True, None
     except TelegramForbiddenError as e:
         return False, f"forbidden: {e.message}"
@@ -52,12 +60,20 @@ async def deliver(bot: Bot, conn_id: str, chat_id: int, text: str,
         return False, str(e)
 
 
-def _preview(kind: str, chat_id: int, text: str, reason: str | None) -> str:
+def _is_parse_error(e: TelegramBadRequest) -> bool:
+    """True when Telegram rejected the message because of bad HTML entities."""
+    return "can't parse entities" in (e.message or "").lower()
+
+
+def _preview(kind: str, chat_id: int, text: str, reason: str | None,
+             *, escape_text: bool) -> str:
     head = "📨 Черновик ответа" if kind == "reply" else "📣 Напоминание об оплате"
     note = f"\n⚠️ {html.escape(reason)}" if reason else ""
-    # The preview itself is sent as HTML — escape the model text so '<'/'&'
-    # in a reply can't break the owner's draft card.
-    return f"{head} → клиент <code>{chat_id}</code>{note}\n\n{html.escape(text)}"
+    # Show the draft exactly as the customer would see it — render the model's
+    # HTML. If it turns out to be malformed (parse error on send), we re-render
+    # with the text escaped so the owner still sees the draft as raw text.
+    body = html.escape(text) if escape_text else text
+    return f"{head} → клиент <code>{chat_id}</code>{note}\n\n{body}"
 
 
 async def send_or_approve(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
@@ -76,11 +92,21 @@ async def send_or_approve(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
 
     draft_id = await local.create_draft(owner_id, conn_id, chat_id, kind, text)
     try:
-        await bot.send_message(
-            owner_id,
-            _preview(kind, chat_id, text, reason),
-            reply_markup=draft_kb(draft_id),
-        )
+        try:
+            await bot.send_message(
+                owner_id,
+                _preview(kind, chat_id, text, reason, escape_text=False),
+                reply_markup=draft_kb(draft_id),
+            )
+        except TelegramBadRequest as e:
+            if not _is_parse_error(e):
+                raise
+            # Model emitted broken HTML — show it escaped so the card still sends.
+            await bot.send_message(
+                owner_id,
+                _preview(kind, chat_id, text, reason, escape_text=True),
+                reply_markup=draft_kb(draft_id),
+            )
     except Exception:  # noqa: BLE001
         logger.exception("could not notify owner %s about draft", owner_id)
     return False
