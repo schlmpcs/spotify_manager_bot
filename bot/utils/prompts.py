@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from config import settings
+
 # Topics we never auto-answer — drafts go to the manager for approval instead.
 ESCALATION_TRIGGERS = (
     "уже оплат", "оплатил", "оплатила", "перевёл", "перевел", "скинул",
@@ -30,17 +32,35 @@ _SYSTEM = """Ты — менеджер сервиса Spotify Premium (семе�
 {style}
 
 Строгие правила:
-- Отвечай ТОЛЬКО на основе данных из блока «ДАННЫЕ КЛИЕНТА» ниже. \
-Никогда не выдумывай суммы, даты, номера карт или реквизиты.
-- Если клиент спрашивает то, чего нет в данных, или хочет реквизиты для оплаты — \
-коротко скажи, что сейчас уточнишь / пришлёшь, и не придумывай цифры.
+- Отвечай ТОЛЬКО на основе данных из блоков «ТАРИФЫ» и «ДАННЫЕ КЛИЕНТА» ниже. \
+Никогда не выдумывай даты, номера карт или реквизиты для оплаты.
+- Цены можно и нужно называть из блока «ТАРИФЫ» — даже если клиента нет в базе \
+(например, новый клиент спрашивает «сколько стоит»). Если не знаешь страну клиента — \
+коротко спроси (Казахстан или Россия) или назови оба варианта.
+- Если клиент хочет реквизиты для оплаты или спрашивает то, чего нет ни в тарифах, \
+ни в данных — коротко скажи, что сейчас уточнишь / пришлёшь, и не выдумывай.
 - Никогда не обещай возвраты, скидки и не подтверждай оплату сам.
 - Пиши на языке клиента (русский по умолчанию, можно казахский/английский).
 - Коротко. Не пиши простыни. Без официального тона.
 - Твоя цель в проактивных сообщениях — вежливо напомнить про оплату и помочь оплатить.
 
+{prices}
+
 {context}
 """
+
+
+def price_list() -> str:
+    """General tariff block — real config prices the bot may quote to anyone."""
+    return (
+        "ТАРИФЫ (актуальные цены, можно называть клиентам):\n"
+        f"- Семейная подписка (слот в общей группе): "
+        f"{settings.kz_group_price}₸/мес (Казахстан) · {settings.ru_group_price}₽/мес (Россия)\n"
+        f"- Индивидуальная подписка: "
+        f"{settings.kz_individual_price}₸/мес (Казахстан) · {settings.ru_individual_price}₽/мес (Россия)\n"
+        f"- Duo (на двоих): "
+        f"{settings.kz_duo_price}₸/мес (Казахстан) · {settings.ru_duo_price}₽/мес (Россия)"
+    )
 
 
 # Per-segment OBJECTIVE — frames *what* the message should achieve and *which
@@ -96,6 +116,7 @@ def build_context_block(status: dict | None) -> str:
 def system_prompt(status: dict | None, style: str | None) -> str:
     return _SYSTEM.format(
         style=(style or DEFAULT_STYLE).strip(),
+        prices=price_list(),
         context=build_context_block(status),
     )
 

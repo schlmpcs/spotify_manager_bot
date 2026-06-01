@@ -93,9 +93,15 @@ class Settings(BaseSettings):
     )
     bot_timezone: str = Field("Asia/Almaty", description="Timezone")
 
-    # --- Pricing defaults used to state amounts owed (grounding) ---
+    # --- Pricing defaults used to state amounts owed + quote prices (grounding) ---
+    # Mirror the main bot's settings.py. The bot may state these to anyone,
+    # including prospects not yet in the payment DB.
     kz_group_price: int = Field(700, description="₸/month, KZ group slot")
     ru_group_price: int = Field(200, description="₽/month, RU group slot")
+    kz_individual_price: int = Field(1500, description="₸/month, KZ individual plan")
+    ru_individual_price: int = Field(250, description="₽/month, RU individual plan")
+    kz_duo_price: int = Field(2500, description="₸/month, KZ duo plan")
+    ru_duo_price: int = Field(600, description="₽/month, RU duo plan")
 
     support_username: str = Field(
         "sptfy_premium", description="Manager/support @username (no @)"
