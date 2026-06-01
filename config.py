@@ -69,12 +69,13 @@ class Settings(BaseSettings):
         "(sensitive topics are always escalated regardless)",
     )
     reply_rate_per_min: int = Field(
-        6,
+        15,
         description="Abuse guard: max AI replies to one customer per minute; "
-        "further messages in the window are recorded but not answered",
+        "further messages in the window are recorded but not answered. Set high "
+        "enough not to clip a fast human chatter — only blocks bot-speed floods",
     )
     reply_rate_per_hour: int = Field(
-        40, description="Abuse guard: max AI replies to one customer per hour"
+        150, description="Abuse guard: max AI replies to one customer per hour"
     )
     proactive_mode: str = Field(
         "approve",
