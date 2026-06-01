@@ -1,10 +1,14 @@
-"""Async LLM client routing over a chain of free OpenRouter models.
+"""Async LLM client over any OpenAI-compatible Chat Completions endpoint.
 
-OpenRouter exposes many models behind one OpenAI-compatible endpoint. The free
-tags (``...:free``) are generous but rate-limited per-model, so we keep an
-ordered list and, on a 429 (or any transient failure), fall through to the next
-model — borrowed from https://github.com/rlxrd/assist_ai_bot. Strictly async
-(aiohttp); returns None on total failure so callers can degrade gracefully.
+One code path serves three providers — switch purely via `.env`:
+
+  • OpenAI      LLM_BASE_URL=https://api.openai.com/v1      LLM_MODELS=["gpt-4o-mini"]
+  • OpenRouter  LLM_BASE_URL=https://openrouter.ai/api/v1   LLM_MODELS=["...:free", ...]
+  • Ollama      LLM_BASE_URL=http://host.docker.internal:11434/v1  (local GPU)
+
+`LLM_MODELS` is an ordered fallback chain: on a 429 (or any transient failure)
+the next model is tried. Strictly async (aiohttp); returns None on total
+failure so callers can degrade gracefully.
 """
 
 import logging
@@ -16,23 +20,22 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# Models that, when hit, mean "this whole attempt is doomed — stop rotating".
-# Anything else (429, 5xx, timeout, model unavailable) just tries the next tag.
+# Statuses that mean "the whole attempt is doomed — stop rotating".
+# Anything else (429, 404, 5xx, timeout) just tries the next model.
 _FATAL_STATUSES = {401, 403}
 
 
 async def chat(messages: list[dict], *, temperature: float = 0.6) -> Optional[str]:
-    """Call OpenRouter chat-completions, rotating through the free-model chain.
+    """Call chat-completions, rotating through the model chain on failure.
 
     `messages` is a list of {role, content}. Returns the assistant text from the
-    first model that answers, or None if every model fails (caller decides
-    fallback).
+    first model that answers, or None if every model fails.
     """
-    url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
+    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
     headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key.get_secret_value()}",
+        "Authorization": f"Bearer {settings.llm_api_key.get_secret_value()}",
         "Content-Type": "application/json",
-        # Optional attribution headers OpenRouter recommends; harmless if unused.
+        # Attribution headers OpenRouter recommends; ignored by OpenAI/Ollama.
         "HTTP-Referer": "https://github.com/schlmpcs/spotify_manager_bot",
         "X-Title": "spotify-manager-bot",
     }
@@ -66,13 +69,13 @@ async def chat(messages: list[dict], *, temperature: float = 0.6) -> Optional[st
                         body = await resp.text()
                         if resp.status in _FATAL_STATUSES:
                             logger.error(
-                                "OpenRouter auth error %s (%s) — aborting chain: %s",
+                                "LLM auth error %s (%s) — aborting chain: %s",
                                 resp.status, model, body,
                             )
                             return None
-                        # 429 / 404 / 5xx → rotate to the next free model.
+                        # 429 / 404 / 5xx → rotate to the next model.
                         logger.warning(
-                            "OpenRouter %s on %s; trying next model: %s",
+                            "LLM %s on %s; trying next model: %s",
                             resp.status, model, body[:200],
                         )
                 except aiohttp.ClientError as e:
@@ -83,5 +86,5 @@ async def chat(messages: list[dict], *, temperature: float = 0.6) -> Optional[st
         logger.error("LLM call failed: %s", e)
         return None
 
-    logger.error("All %d OpenRouter models failed", len(settings.llm_models))
+    logger.error("All %d LLM models failed", len(settings.llm_models))
     return None

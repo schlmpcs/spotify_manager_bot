@@ -29,22 +29,21 @@ class Settings(BaseSettings):
         "(your manager account(s))",
     )
 
-    # --- LLM (OpenRouter, free-model fallback chain) ---
-    openrouter_api_key: SecretStr = Field(
-        ..., description="OpenRouter API key (https://openrouter.ai/keys)"
+    # --- LLM (any OpenAI-compatible API: OpenAI, OpenRouter, or local Ollama) ---
+    llm_base_url: str = Field(
+        "https://api.openai.com/v1",
+        description="OpenAI-compatible base URL. "
+        "OpenRouter: https://openrouter.ai/api/v1 | "
+        "Ollama: http://host.docker.internal:11434/v1",
     )
-    openrouter_base_url: str = Field(
-        "https://openrouter.ai/api/v1", description="OpenRouter API base URL"
+    llm_api_key: SecretStr = Field(
+        ...,
+        description="API key for the provider above. For local Ollama any "
+        "non-empty placeholder works (e.g. 'ollama').",
     )
     llm_models: List[str] = Field(
-        default_factory=lambda: [
-            "deepseek/deepseek-chat-v3.1:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "qwen/qwen-2.5-72b-instruct:free",
-            "google/gemini-2.0-flash-exp:free",
-            "mistralai/mistral-small-3.2-24b-instruct:free",
-        ],
-        description="Ordered free-model chain; on 429/error the next is tried",
+        default_factory=lambda: ["gpt-4o-mini"],
+        description="Ordered model chain; on 429/error the next is tried",
     )
     llm_timeout: int = Field(60, description="LLM request timeout (s)")
     llm_max_tokens: int = Field(280, description="Max tokens per reply")

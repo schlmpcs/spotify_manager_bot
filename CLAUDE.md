@@ -8,7 +8,7 @@ A **separate** Telegram bot from the main payment bot (`../spotify_family_automa
 
 - **Answers customers as the manager**, in the manager's style, grounded in the real payment database.
 - **Texts overdue customers first** (proactive nudges) — because customers ignore the bot and only pay after the manager messages them.
-- Uses **free LLMs via OpenRouter** with an automatic fallback chain (rotates to the next free model on a 429) — no API cost.
+- Talks to any **OpenAI-compatible LLM API** (OpenAI / OpenRouter / local Ollama) via an ordered fallback chain that rotates to the next model on a 429 — provider chosen purely by `.env`.
 
 It only **reads** the main payment bot's PostgreSQL DB for grounding — it never writes to it.
 
@@ -21,7 +21,7 @@ It only **reads** the main payment bot's PostgreSQL DB for grounding — it neve
 | Language | Python 3.11+ (Dockerfile pins 3.11-slim) |
 | Bot framework | Aiogram 3.x (FSM via MemoryStorage) |
 | Telegram feature | Business connection (`business_connection` / `business_message` updates; replies via `business_connection_id`) |
-| LLM | OpenRouter (OpenAI-compatible); ordered free-model chain in `LLM_MODELS`, rotates on 429 |
+| LLM | Any OpenAI-compatible API (OpenAI / OpenRouter / Ollama) set by `LLM_BASE_URL`; ordered chain in `LLM_MODELS`, rotates on 429 |
 | Own state | SQLite via **aiosqlite** (`data/manager.db`) |
 | Grounding source | **asyncpg**, read-only into the payment bot's Postgres |
 | Scheduling | APScheduler 3.x (`AsyncIOScheduler`) |
@@ -40,7 +40,7 @@ It only **reads** the main payment bot's PostgreSQL DB for grounding — it neve
 │   │   ├── business.py      # @router.business_connection + @router.business_message
 │   │   └── owner.py         # Owner commands (/start /status /style /auto /nudge) + draft-approval callbacks
 │   ├── services/
-│   │   ├── llm.py           # Async OpenRouter client — chat(messages) -> str | None (free-model fallback chain)
+│   │   ├── llm.py           # Async OpenAI-compatible client — chat(messages) -> str | None (model fallback chain)
 │   │   ├── dispatch.py      # deliver() (send AS manager) + send_or_approve() (auto vs draft)
 │   │   └── outreach.py      # run_outreach(bot) — daily overdue-customer nudges
 │   ├── db/
@@ -87,8 +87,9 @@ All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send
 |---|---|
 | `BOT_TOKEN` | This automation bot (a **new** @BotFather bot, Business Mode enabled) |
 | `OWNER_IDS` | Manager Telegram user id(s) — owner commands are filtered to these |
-| `OPENROUTER_API_KEY` | OpenRouter key (free tier works) |
-| `LLM_MODELS` | Ordered free-model chain (JSON list); next is tried on a 429 |
+| `LLM_BASE_URL` | OpenAI-compatible endpoint (OpenAI / OpenRouter / Ollama) |
+| `LLM_API_KEY` | Key for that provider (`ollama` placeholder for local) |
+| `LLM_MODELS` | Ordered model chain (JSON list); next is tried on a 429 |
 | `DB_*` | The **same** Postgres as the payment bot (read-only grounding) |
 | `LOCAL_DB_PATH` | SQLite file for this bot's own state |
 | `AUTO_REPLY` | `true` = auto-send replies; `false` = draft every reply |
@@ -132,7 +133,7 @@ Draft approval is via inline buttons (`d:send:<id>` / `d:edit:<id>` / `d:skip:<i
 
 **Local:**
 ```bash
-cp .env.example .env          # fill BOT_TOKEN, OWNER_IDS, OPENROUTER_API_KEY, DB_*
+cp .env.example .env          # fill BOT_TOKEN, OWNER_IDS, LLM_API_KEY, DB_*
 pip install -r requirements.txt
 python main.py
 ```

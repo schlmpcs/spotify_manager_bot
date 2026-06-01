@@ -7,8 +7,9 @@ Telegram Business / Chat Automation). It:
   payment database (never invents prices or due dates).
 - **Texts overdue customers first** — because people ignore the bot and only pay
   after the manager messages them.
-- Runs on **free LLMs via OpenRouter**, with an automatic fallback chain — if one
-  free model is rate-limited (429), it tries the next — so there's no API cost.
+- Runs on **any OpenAI-compatible LLM** — OpenAI (`gpt-4o-mini`), OpenRouter's free
+  models, or a local Ollama model — chosen by `.env`, with a fallback chain that
+  rotates to the next model on a rate-limit (429).
 
 It is a *separate* bot from the main payment bot. It only **reads** the payment
 bot's PostgreSQL database for grounding.
@@ -22,7 +23,7 @@ customer ──► manager's account ──► (Telegram Business) ──► thi
                                                               │
                               grounding ◄── PostgreSQL (payment bot, read-only)
                                                               │
-                                  draft ◄── OpenRouter (free-model fallback chain)
+                                  draft ◄── LLM (OpenAI / OpenRouter / Ollama)
                                                               │
    reply / nudge ◄── sent AS the manager via business_connection_id
 ```
@@ -50,17 +51,17 @@ directly; the rest you'll see as drafts.
 - Talk to [@BotFather](https://t.me/BotFather) → **new bot** → copy the token.
 - (BotFather → your bot → **Bot Settings → Business Mode → Enable**.)
 
-### 2. Get a free OpenRouter key
-- Sign up at [openrouter.ai](https://openrouter.ai) → **Keys** → create a key.
-- Free models (`...:free`) need no credit; they're just rate-limited, which the
-  fallback chain in `LLM_MODELS` handles by rotating to the next model on a 429.
+### 2. Pick an LLM provider
+Set `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODELS` in `.env` (examples inline there):
+- **OpenAI** — reliable, cheap with `gpt-4o-mini`; key from [platform.openai.com](https://platform.openai.com).
+- **OpenRouter** — free models (rate-limited); key from [openrouter.ai/keys](https://openrouter.ai/keys).
+- **Ollama** — free & private, runs on your own GPU (see [Local model](#local-model-ollama)).
 
 ### 3. Configure
 ```bash
-cp .env.example .env   # fill BOT_TOKEN, OWNER_IDS, OPENROUTER_API_KEY, DB creds
+cp .env.example .env   # fill BOT_TOKEN, OWNER_IDS, LLM_API_KEY, DB creds
 ```
-Point `DB_*` at the **same PostgreSQL** the main payment bot uses. `LLM_MODELS`
-already lists a sensible free chain — reorder or extend it as you like.
+Point `DB_*` at the **same PostgreSQL** the main payment bot uses.
 
 ### 4. Run
 ```bash
@@ -97,8 +98,37 @@ messages"**. The bot will DM you a confirmation.
 | `PROACTIVE_MODE` | `auto` (send as manager), `approve` (one-tap), `off` |
 | `PROACTIVE_OVERDUE_DAYS` | Start nudging this many days overdue |
 | `PROACTIVE_COOLDOWN_DAYS` | Don't re-nudge within N days |
-| `OPENROUTER_API_KEY` | Your OpenRouter key (free tier is fine) |
-| `LLM_MODELS` | Ordered free-model chain; next is tried on a 429 |
+| `LLM_BASE_URL` | OpenAI-compatible endpoint (OpenAI / OpenRouter / Ollama) |
+| `LLM_API_KEY` | Key for that provider (`ollama` for local) |
+| `LLM_MODELS` | Ordered model chain; next is tried on a 429 |
+
+---
+
+## Local model (Ollama)
+
+To run **free & private** on your own GPU (e.g. an RTX 5060 8 GB) instead of a
+paid API. The bot must be able to reach the machine that hosts Ollama.
+
+```bash
+# on the GPU box — install https://ollama.com, then:
+ollama pull qwen2.5:7b-instruct      # ~4.7 GB Q4, fits 8 GB VRAM, strong Russian
+ollama serve                          # exposes http://localhost:11434
+```
+`qwen2.5:7b-instruct` is the sweet spot for 8 GB. Tighter alternatives if you
+want more headroom: `llama3.1:8b`, `gemma2:9b`.
+
+Then in `.env`:
+```bash
+LLM_BASE_URL=http://host.docker.internal:11434/v1   # Ollama's OpenAI-compatible API
+LLM_API_KEY=ollama                                   # any non-empty placeholder
+LLM_MODELS=["qwen2.5:7b-instruct"]
+```
+
+> **Where it runs matters.** A typical VPS has no GPU. To use the 5060 you must
+> either run the whole bot **on the GPU machine**, or keep the bot on the VPS and
+> expose Ollama to it over a private link (e.g. Tailscale / WireGuard) — never
+> expose `11434` to the public internet. For a GPU-less VPS, `gpt-4o-mini` is the
+> simplest reliable choice.
 
 ---
 
