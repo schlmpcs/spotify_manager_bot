@@ -32,8 +32,11 @@ customer ──► manager's account ──► (Telegram Business) ──► thi
   auto-sent as the manager (or queued for one-tap approval).
 - **Sensitive topics** ("I already paid", refunds, complaints) are **always**
   escalated to you for approval instead of auto-answered.
-- **Daily job** finds overdue customers and sends a personalised reminder as the
-  manager.
+- **Daily job** (noon Almaty) walks overdue customers through a 2-step reminder,
+  one step per day: **day 1** "не оплачено — будете продлевать?", **day 2**
+  "отключать вас от подписки?". If they still haven't paid after both, on **day 3**
+  it stops messaging them and sends *you* a summary of who to deal with by hand.
+  These two nudge texts are fixed (you own the wording), not LLM-generated.
 
 ### ⚠️ The proactive limitation (read this)
 
@@ -97,7 +100,7 @@ messages"**. The bot will DM you a confirmation.
 | `AUTO_REPLY` | `true` = auto-send replies; `false` = approve each |
 | `PROACTIVE_MODE` | `auto` (send as manager), `approve` (one-tap), `off` |
 | `PROACTIVE_OVERDUE_DAYS` | Start nudging this many days overdue |
-| `PROACTIVE_COOLDOWN_DAYS` | Don't re-nudge within N days |
+| `PROACTIVE_COOLDOWN_DAYS` | Legacy; the staged sequence now advances one step per day |
 | `LLM_BASE_URL` | OpenAI-compatible endpoint (OpenAI / OpenRouter / Ollama) |
 | `LLM_API_KEY` | Key for that provider (`ollama` for local) |
 | `LLM_MODELS` | Ordered model chain; next is tried on a 429 |

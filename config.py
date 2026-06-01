@@ -84,7 +84,7 @@ class Settings(BaseSettings):
         "Each new manual manager message resets the window.",
     )
     proactive_mode: str = Field(
-        "approve",
+        "auto",
         description="Proactive outreach mode: 'auto' (send as manager), "
         "'approve' (manager taps Send), or 'off'",
     )
@@ -95,7 +95,9 @@ class Settings(BaseSettings):
         1, description="Start nudging customers this many days overdue"
     )
     proactive_cooldown_days: int = Field(
-        3, description="Don't nudge the same customer again within N days"
+        3,
+        description="Legacy cooldown (kept for compatibility). The staged nudge "
+        "sequence now advances at most one step per calendar day instead.",
     )
     bot_timezone: str = Field("Asia/Almaty", description="Timezone")
 

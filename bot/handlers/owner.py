@@ -93,9 +93,12 @@ async def cmd_nudge(message: Message, bot: Bot) -> None:
     """Run the overdue-customer outreach right now."""
     from bot.services.outreach import run_outreach
     await message.answer("📣 Запускаю напоминания должникам…")
-    sent, drafted, failed = await run_outreach(bot)
+    r = await run_outreach(bot, force=True)
     await message.answer(
-        f"Готово. Отправлено: {sent}, на подтверждении: {drafted}, не доставлено: {failed}."
+        "Готово.\n"
+        f"1-е напоминание: {r['stage1']} · 2-е напоминание: {r['stage2']}\n"
+        f"Отправлено: {r['sent']} · на подтверждении: {r['drafted']}\n"
+        f"Передано вам (не оплатили после 2-го): {r['final']}"
     )
 
 

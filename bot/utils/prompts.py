@@ -81,6 +81,12 @@ Telegram НЕ поддерживает HTML-списки и заголовки (
 выделяя название тарифа через <b>…</b>. Не переусердствуй с форматированием — \
 сообщение должно выглядеть как живое, а не как страница с разметкой. \
 Символы < > & вне тегов не используй (или пиши словами).
+- Добавляй эмодзи и в обычные сообщения (например когда называешь клиенту его \
+статус, тариф или срок оплаты), чтобы они выглядели живыми и аккуратными — \
+1–2 уместных на сообщение. Эмодзи ВСЕГДА позитивные и доброжелательные \
+(например ✨ 💚 🙂 ✅ 🎵 👍 😊), даже если оплата просрочена. НИКОГДА не используй \
+негативные, тревожные или «ругающие» эмодзи (❌ ⚠️ 😡 😞 😢 🚫 ⛔️ 💀) и не нагнетай \
+тон — даже про просрочку пиши спокойно и по-доброму.
 - Твоя цель в проактивных сообщениях — вежливо напомнить про оплату и помочь оплатить.
 
 {prices}
@@ -90,7 +96,13 @@ Telegram НЕ поддерживает HTML-списки и заголовки (
 
 
 def price_list() -> str:
-    """General tariff block — real config prices the bot may quote to anyone."""
+    """General tariff block — real config prices the bot may quote to anyone.
+
+    Includes a canonical, customer-facing layout (Telegram HTML, grouped by
+    country) the model should reuse verbatim when a customer asks for *all*
+    prices. The data lives in ``settings`` — never hard-code amounts here.
+    """
+    bot = settings.purchase_bot_username
     return (
         "ТАРИФЫ (актуальные цены, можно называть клиентам):\n"
         f"- Семейная подписка (слот в общей группе): "
@@ -98,7 +110,25 @@ def price_list() -> str:
         f"- Индивидуальная подписка: "
         f"{settings.kz_individual_price}₸/мес (Казахстан) · {settings.ru_individual_price}₽/мес (Россия)\n"
         f"- Duo (на двоих): "
-        f"{settings.kz_duo_price}₸/мес (Казахстан) · {settings.ru_duo_price}₽/мес (Россия)"
+        f"{settings.kz_duo_price}₸/мес (Казахстан) · {settings.ru_duo_price}₽/мес (Россия)\n"
+        "\n"
+        "Когда клиент просит ПОЛНЫЙ список цен — оформи ответ ровно в этом виде "
+        "(Telegram HTML, сгруппировано по странам), подставив только нужное:\n"
+        "🎵 <b>Цены на подписки Spotify Premium</b> 🎵\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "\n"
+        "🇰🇿 <b>Казахстан</b>\n"
+        f"   👨‍👩‍👧‍👦 Семейная — {settings.kz_group_price}₸ / мес\n"
+        f"   👤 Индивидуальная — {settings.kz_individual_price}₸ / мес\n"
+        f"   👥 Duo (на двоих) — {settings.kz_duo_price}₸ / мес\n"
+        "\n"
+        "🇷🇺 <b>Россия</b>\n"
+        f"   👨‍👩‍👧‍👦 Семейная — {settings.ru_group_price}₽ / мес\n"
+        f"   👤 Индивидуальная — {settings.ru_individual_price}₽ / мес\n"
+        f"   👥 Duo (на двоих) — {settings.ru_duo_price}₽ / мес\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"✨ Хотите подключиться? Напишите боту 👉 @{bot}"
     )
 
 
@@ -186,15 +216,14 @@ def split_call_manager(reply: str) -> tuple[bool, str]:
     return True, clean or CALL_MANAGER_FALLBACK
 
 
-def outreach_instruction(status: dict) -> str:
-    """User-turn instruction that asks the model to draft a first nudge."""
-    entries = status.get("entries") or []
-    overdue = [e for e in entries if e["is_overdue"]]
-    e = overdue[0] if overdue else (entries[0] if entries else None)
-    what = f"{e['label']}, {e['amount']}{e['currency']}" if e else "подписку"
-    return (
-        "Напиши первое короткое дружелюбное сообщение этому клиенту с напоминанием "
-        f"оплатить ({what}). "
-        "Не дави, просто по-человечески напомни и предложи помощь с оплатой. "
-        "Одно сообщение, без приветственных шаблонов вроде «Здравствуйте, уважаемый»."
-    )
+# Staged overdue nudges. These go out verbatim (no LLM) so the wording stays
+# consistent and predictable — the manager owns this exact phrasing.
+#   Day 1: gentle reminder + ask if they'll renew.
+#   Day 2: firmer — warn that the subscription will be switched off.
+# After the day-2 nudge goes unanswered, no further message is sent to the
+# customer; the manager is notified instead (see outreach.run_outreach).
+NUDGE_STAGE_1 = "Здравствуйте! Подписка не оплачена — будете продлевать?"
+NUDGE_STAGE_2 = "Здравствуйте! Подписка всё ещё не оплачена. Отключать вас от подписки?"
+
+# Indexed by the stage we're about to send (1 = first nudge, 2 = second nudge).
+NUDGE_TEXT = {1: NUDGE_STAGE_1, 2: NUDGE_STAGE_2}

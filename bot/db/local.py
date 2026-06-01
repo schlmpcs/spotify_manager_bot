@@ -51,6 +51,18 @@ CREATE TABLE IF NOT EXISTS outreach_log (
 );
 CREATE INDEX IF NOT EXISTS idx_outreach_customer ON outreach_log(customer_id, sent_at);
 
+-- Where each customer sits in the staged overdue-nudge sequence. `stage` counts
+-- nudges already sent in the CURRENT overdue cycle (0 none → 1 first nudge sent →
+-- 2 second nudge sent → 3 manager notified / done). `cycle_due` is the ISO
+-- next_payment_date the sequence is tracking — when the customer pays and later
+-- lapses again, the new due date differs and the sequence restarts from stage 0.
+CREATE TABLE IF NOT EXISTS outreach_state (
+    customer_id  INTEGER PRIMARY KEY,
+    stage        INTEGER NOT NULL DEFAULT 0,
+    cycle_due    TEXT,
+    last_sent_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS manager_activity (
     chat_id     INTEGER PRIMARY KEY,      -- the customer's chat the manager typed into
     last_at     INTEGER NOT NULL          -- unix seconds of their last manual message
@@ -215,17 +227,31 @@ async def delete_draft(draft_id: int) -> None:
     await _db.commit()
 
 
-# ── outreach cooldown ──────────────────────────────────────────────────────
-async def contacted_recently(customer_id: int, within_days: int) -> bool:
-    cutoff = _now() - within_days * 86400
+# ── staged overdue outreach ────────────────────────────────────────────────
+async def get_outreach_state(customer_id: int) -> Optional[aiosqlite.Row]:
     cur = await _db.execute(
-        "SELECT 1 FROM outreach_log WHERE customer_id=? AND sent_at>? LIMIT 1",
-        (customer_id, cutoff),
+        "SELECT * FROM outreach_state WHERE customer_id=?", (customer_id,)
     )
-    return await cur.fetchone() is not None
+    return await cur.fetchone()
+
+
+async def set_outreach_state(customer_id: int, stage: int, cycle_due: str) -> None:
+    """Record that the customer is now at `stage` of the sequence for the overdue
+    cycle identified by `cycle_due`. Stamps last_sent_at = now."""
+    await _db.execute(
+        """INSERT INTO outreach_state (customer_id, stage, cycle_due, last_sent_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(customer_id) DO UPDATE SET
+             stage=excluded.stage,
+             cycle_due=excluded.cycle_due,
+             last_sent_at=excluded.last_sent_at""",
+        (customer_id, stage, cycle_due, _now()),
+    )
+    await _db.commit()
 
 
 async def log_outreach(customer_id: int) -> None:
+    """Append-only audit trail of every nudge actually sent."""
     await _db.execute(
         "INSERT INTO outreach_log (customer_id, sent_at) VALUES (?, ?)",
         (customer_id, _now()),

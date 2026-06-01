@@ -70,8 +70,14 @@ It only **reads** the main payment bot's PostgreSQL DB for grounding — it neve
 ### Sending AS the manager
 All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send_message(chat_id, text, business_connection_id=conn_id)` (and a typing action first). **Telegram only allows messaging users the manager account already has a chat with** — undeliverable sends fall back to a draft (`send_or_approve` catches `TelegramBadRequest` / `TelegramForbiddenError`).
 
-### Proactive outreach
-`outreach.run_outreach(bot)` (daily via APScheduler, or `/nudge`): pulls overdue customers from Postgres (**both** overdue group slots and overdue individual/duo plans), dedupes per user, skips those contacted within `PROACTIVE_COOLDOWN_DAYS`, drafts a nudge via the LLM, and sends/approves under the first connected owner identity. `log_outreach()` records the cooldown.
+### Proactive outreach (staged overdue nudges)
+`outreach.run_outreach(bot)` runs **daily at `PROACTIVE_HOUR` in `BOT_TIMEZONE`** (Asia/Almaty = UTC+5, so noon Almaty) via APScheduler, or on demand via `/nudge` (which passes `force=True` to run even when `PROACTIVE_MODE=off`). It pulls overdue customers from Postgres (**both** overdue group slots and overdue individual/duo plans), dedupes per user, and advances each one **one stage per calendar day**:
+
+- **Stage 1 (day 1):** sends `prompts.NUDGE_STAGE_1` — fixed text, no LLM.
+- **Stage 2 (day 2):** sends `prompts.NUDGE_STAGE_2`.
+- **Stage 3 (day 3):** no customer message — instead the manager gets a single summary (`_final_report`) listing everyone who still hasn't paid after both nudges. Stage stays at 3 (no repeats).
+
+Stage lives in SQLite `outreach_state` (`stage`, `cycle_due`, `last_sent_at`). `cycle_due` is the most-urgent overdue entry's `next_payment_date`: when a customer pays and later lapses again, the new due date differs → the sequence **restarts at stage 1**. The `last_sent_at` same-day guard (in `BOT_TIMEZONE`) prevents a second advance if `/nudge` is run the same day the cron already fired. Nudges are sent/approved under the first connected owner identity; `log_outreach()` keeps an append-only audit trail. The nudge texts are **fixed** (the manager owns the wording) — this is the one customer-facing path that is *not* LLM-generated.
 
 ### Grounding (never invent facts)
 `bot/db/payments.py` covers **all customer types** and merges them into one `status` dict:
@@ -99,7 +105,7 @@ All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send
 | `AUTO_REPLY` | `true` = auto-send replies; `false` = draft every reply |
 | `REPLY_RATE_PER_MIN`, `REPLY_RATE_PER_HOUR` | Per-customer abuse guard — over the cap, messages are stored but not answered (no LLM call) |
 | `PROACTIVE_MODE` | `auto` (send as manager) / `approve` (one-tap) / `off` |
-| `PROACTIVE_OVERDUE_DAYS`, `PROACTIVE_COOLDOWN_DAYS`, `PROACTIVE_HOUR` | Outreach tuning |
+| `PROACTIVE_OVERDUE_DAYS`, `PROACTIVE_HOUR` | Outreach tuning (overdue threshold; daily run hour). `PROACTIVE_COOLDOWN_DAYS` is legacy — staging now advances one step per calendar day |
 | `KZ_GROUP_PRICE`, `RU_GROUP_PRICE` | Amounts stated to customers |
 
 Per-owner overrides (style prompt, auto-reply) live in the SQLite `owner_settings` table and take precedence over the global `.env` defaults.
