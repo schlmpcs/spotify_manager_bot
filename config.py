@@ -68,6 +68,14 @@ class Settings(BaseSettings):
         description="Auto-send AI replies to incoming customer messages "
         "(sensitive topics are always escalated regardless)",
     )
+    reply_rate_per_min: int = Field(
+        6,
+        description="Abuse guard: max AI replies to one customer per minute; "
+        "further messages in the window are recorded but not answered",
+    )
+    reply_rate_per_hour: int = Field(
+        40, description="Abuse guard: max AI replies to one customer per hour"
+    )
     proactive_mode: str = Field(
         "approve",
         description="Proactive outreach mode: 'auto' (send as manager), "

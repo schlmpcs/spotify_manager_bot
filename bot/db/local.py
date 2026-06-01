@@ -123,6 +123,25 @@ async def get_history(chat_id: int, limit: int = 10) -> list[dict]:
     return [{"role": r["role"], "content": r["text"]} for r in reversed(rows)]
 
 
+async def count_recent_user_messages(
+    chat_id: int, minute_cutoff: int, hour_cutoff: int
+) -> tuple[int, int]:
+    """(# customer messages in the last minute, # in the last hour) — abuse guard.
+
+    `minute_cutoff` / `hour_cutoff` are unix-second thresholds (now-60, now-3600).
+    """
+    cur = await _db.execute(
+        """SELECT
+             COALESCE(SUM(CASE WHEN created_at > ? THEN 1 ELSE 0 END), 0) AS per_min,
+             COUNT(*) AS per_hour
+           FROM messages
+           WHERE chat_id=? AND role='user' AND created_at > ?""",
+        (minute_cutoff, chat_id, hour_cutoff),
+    )
+    row = await cur.fetchone()
+    return int(row["per_min"]), int(row["per_hour"])
+
+
 # ── owner settings ─────────────────────────────────────────────────────────
 async def get_owner(owner_id: int) -> Optional[aiosqlite.Row]:
     cur = await _db.execute(

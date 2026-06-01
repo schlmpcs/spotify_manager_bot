@@ -93,6 +93,7 @@ All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send
 | `DB_*` | The **same** Postgres as the payment bot (read-only grounding) |
 | `LOCAL_DB_PATH` | SQLite file for this bot's own state |
 | `AUTO_REPLY` | `true` = auto-send replies; `false` = draft every reply |
+| `REPLY_RATE_PER_MIN`, `REPLY_RATE_PER_HOUR` | Per-customer abuse guard — over the cap, messages are stored but not answered (no LLM call) |
 | `PROACTIVE_MODE` | `auto` (send as manager) / `approve` (one-tap) / `off` |
 | `PROACTIVE_OVERDUE_DAYS`, `PROACTIVE_COOLDOWN_DAYS`, `PROACTIVE_HOUR` | Outreach tuning |
 | `KZ_GROUP_PRICE`, `RU_GROUP_PRICE` | Amounts stated to customers |

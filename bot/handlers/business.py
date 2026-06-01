@@ -7,6 +7,7 @@ manager via `business_connection_id`.
 """
 
 import logging
+import time
 
 from aiogram import Bot, Router
 from aiogram.types import BusinessConnection, Message
@@ -70,6 +71,19 @@ async def on_business_message(message: Message, bot: Bot) -> None:
 
     customer_id = message.chat.id
     await local.add_message(customer_id, "user", message.text)
+
+    # Abuse guard: cap paid LLM calls per customer. The message is still stored
+    # (kept for context), we just don't generate a reply while they're flooding.
+    now = int(time.time())
+    per_min, per_hour = await local.count_recent_user_messages(
+        customer_id, now - 60, now - 3600
+    )
+    if per_min > settings.reply_rate_per_min or per_hour > settings.reply_rate_per_hour:
+        logger.info(
+            "Rate-limited customer %s (%d/min, %d/hr) — skipping LLM reply",
+            customer_id, per_min, per_hour,
+        )
+        return
 
     # Ground the reply in real payment data.
     status = await payments.get_customer_status(customer_id)
