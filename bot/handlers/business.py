@@ -6,6 +6,7 @@ then arrive here as `business_message` updates; replies go out AS the
 manager via `business_connection_id`.
 """
 
+import html
 import logging
 import time
 
@@ -64,13 +65,25 @@ async def on_business_message(message: Message, bot: Bot) -> None:
 
     owner_id = conn["owner_id"]
 
-    # The manager's own outgoing messages also arrive here — record for context, don't reply.
+    # The manager's own outgoing messages also arrive here — record for context,
+    # don't reply. A manual message also means the manager has taken this chat
+    # over: start (or reset) a quiet window so the bot doesn't talk over them.
     if message.from_user and message.from_user.id == owner_id:
         await local.add_message(message.chat.id, "assistant", message.text)
+        await local.record_manager_activity(message.chat.id)
         return
 
     customer_id = message.chat.id
     await local.add_message(customer_id, "user", message.text)
+
+    # If the manager recently replied to this customer by hand, stay out of the
+    # chat — keep storing messages for context, but let the manager handle it.
+    if await local.manager_active_within(customer_id, settings.manager_takeover_hours):
+        logger.info(
+            "Manager active in chat %s within %dh — skipping bot reply",
+            customer_id, settings.manager_takeover_hours,
+        )
+        return
 
     # Abuse guard: cap paid LLM calls per customer. The message is still stored
     # (kept for context), we just don't generate a reply while they're flooding.
@@ -108,7 +121,7 @@ async def on_business_message(message: Message, bot: Bot) -> None:
             await bot.send_message(
                 owner_id,
                 f"🤖 Клиент <code>{customer_id}</code> написал, но ИИ не ответил. "
-                f"Ответьте вручную.\n\n«{message.text}»",
+                f"Ответьте вручную.\n\n«{html.escape(message.text)}»",
             )
         except Exception:  # noqa: BLE001
             pass
@@ -137,7 +150,7 @@ async def on_business_message(message: Message, bot: Bot) -> None:
             await bot.send_message(
                 owner_id,
                 f"🙋 Клиент <code>{customer_id}</code> задал вопрос, на который я не "
-                f"смог ответить — нужен ваш ответ.\n\n«{message.text}»",
+                f"смог ответить — нужен ваш ответ.\n\n«{html.escape(message.text)}»",
             )
         except Exception:  # noqa: BLE001
             pass

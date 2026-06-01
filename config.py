@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     reply_rate_per_hour: int = Field(
         150, description="Abuse guard: max AI replies to one customer per hour"
     )
+    manager_takeover_hours: int = Field(
+        24,
+        description="When the manager replies to a customer by hand, stay silent "
+        "in that chat for this many hours so the bot doesn't talk over them. "
+        "Each new manual manager message resets the window.",
+    )
     proactive_mode: str = Field(
         "approve",
         description="Proactive outreach mode: 'auto' (send as manager), "

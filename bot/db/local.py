@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS outreach_log (
     sent_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_outreach_customer ON outreach_log(customer_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS manager_activity (
+    chat_id     INTEGER PRIMARY KEY,      -- the customer's chat the manager typed into
+    last_at     INTEGER NOT NULL          -- unix seconds of their last manual message
+);
 """
 
 
@@ -226,3 +231,25 @@ async def log_outreach(customer_id: int) -> None:
         (customer_id, _now()),
     )
     await _db.commit()
+
+
+# ── manager takeover ───────────────────────────────────────────────────────
+async def record_manager_activity(chat_id: int) -> None:
+    """Note that the manager just messaged this customer by hand — starts (or
+    resets) the quiet window during which the bot stays out of the chat."""
+    await _db.execute(
+        """INSERT INTO manager_activity (chat_id, last_at) VALUES (?, ?)
+           ON CONFLICT(chat_id) DO UPDATE SET last_at=excluded.last_at""",
+        (chat_id, _now()),
+    )
+    await _db.commit()
+
+
+async def manager_active_within(chat_id: int, hours: int) -> bool:
+    """True if the manager hand-messaged this customer within the last `hours`."""
+    cutoff = _now() - hours * 3600
+    cur = await _db.execute(
+        "SELECT 1 FROM manager_activity WHERE chat_id=? AND last_at>? LIMIT 1",
+        (chat_id, cutoff),
+    )
+    return await cur.fetchone() is not None
