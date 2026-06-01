@@ -71,10 +71,14 @@ It only **reads** the main payment bot's PostgreSQL DB for grounding — it neve
 All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send_message(chat_id, text, business_connection_id=conn_id)` (and a typing action first). **Telegram only allows messaging users the manager account already has a chat with** — undeliverable sends fall back to a draft (`send_or_approve` catches `TelegramBadRequest` / `TelegramForbiddenError`).
 
 ### Proactive outreach
-`outreach.run_outreach(bot)` (daily via APScheduler, or `/nudge`): pulls overdue customers from Postgres, dedupes per user, skips those contacted within `PROACTIVE_COOLDOWN_DAYS`, drafts a nudge via the LLM, and sends/approves under the first connected owner identity. `log_outreach()` records the cooldown.
+`outreach.run_outreach(bot)` (daily via APScheduler, or `/nudge`): pulls overdue customers from Postgres (**both** overdue group slots and overdue individual/duo plans), dedupes per user, skips those contacted within `PROACTIVE_COOLDOWN_DAYS`, drafts a nudge via the LLM, and sends/approves under the first connected owner identity. `log_outreach()` records the cooldown.
 
 ### Grounding (never invent facts)
-`bot/db/payments.py` mirrors the main bot's `get_overdue_users` logic exactly: `COALESCE((latest payment next_payment_date), groups.next_payment_date)` with `ug.is_phantom = FALSE`. Region from `display_id` (`'1…'` → RU `₽`, else KZ `₸`); amounts from `KZ_GROUP_PRICE` / `RU_GROUP_PRICE`. The model is instructed to use **only** the injected context block.
+`bot/db/payments.py` covers **all customer types** and merges them into one `status` dict:
+- **Group members** — mirrors the main bot's `get_overdue_users` logic exactly: `COALESCE((latest payment next_payment_date), groups.next_payment_date)` with `ug.is_phantom = FALSE`. Region from `display_id` (`'1…'` → RU `₽`, else KZ `₸`); amounts from `KZ_GROUP_PRICE` / `RU_GROUP_PRICE`.
+- **Individual / duo clients** (`_IND_SELECT`) — from `individual_clients` (`is_active = TRUE`), COALESCE'd against the latest `individual_payments` row. These carry their own `region` and `price` columns, so we trust those (not the display_id heuristic).
+
+`get_customer_status` returns `entries` (unified list, most-urgent first; each tagged `kind` = `group|individual|duo` with a human `label`), `any_overdue`, and a derived `segment` (`overdue` / `due_today` / `due_soon` / `paid_ahead` / `active` / `unknown`). The segment drives a per-stage **objective** in the prompt (`prompts.SEGMENT_OBJECTIVE`) — it frames *what facts/goal* are relevant, **never the manager's tone** (tone is solely the `/style` voice). The model is instructed to use **only** the injected context block.
 
 ### Safety / escalation
 `prompts.needs_escalation(text)` matches sensitive triggers (`уже оплат`, refunds, complaints, "already paid", "not working", …). Escalated messages are **always** drafted for manager approval, regardless of `AUTO_REPLY`. The model is told never to confirm payment, promise refunds, or output reqs/amounts not in context.

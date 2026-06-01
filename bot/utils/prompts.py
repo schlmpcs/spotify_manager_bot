@@ -43,31 +43,53 @@ _SYSTEM = """Ты — менеджер сервиса Spotify Premium (семе�
 """
 
 
+# Per-segment OBJECTIVE — frames *what* the message should achieve and *which
+# facts* are relevant. It must never dictate tone/voice (that's the manager's
+# own /style); it only sets the goal grounded in the customer's payment stage.
+SEGMENT_OBJECTIVE = {
+    "overdue": "ЗАДАЧА: у клиента есть просроченная оплата — помоги ему оплатить "
+               "(подскажи, как и куда, но реквизиты не выдумывай; при необходимости "
+               "скажи, что пришлёшь их).",
+    "due_today": "ЗАДАЧА: оплата клиента сегодня — при случае напомни и помоги оплатить.",
+    "due_soon": "ЗАДАЧА: ответь по сути вопроса; срок оплаты приближается, можно упомянуть.",
+    "paid_ahead": "ЗАДАЧА: подписка оплачена надолго вперёд — НЕ напоминай об оплате.",
+    "active": "ЗАДАЧА: подписка активна, оплата не требуется в ближайшее время — "
+              "просто помоги по вопросу клиента.",
+    "unknown": "ЗАДАЧА: срок оплаты неизвестен — не утверждай ничего про даты и суммы, "
+               "при необходимости уточни.",
+}
+
+
+def _when_phrase(d: int | None, npd) -> str:
+    if d is None:
+        return "дата оплаты неизвестна"
+    if d < 0:
+        return f"ПРОСРОЧЕНО на {-d} дн. (срок был {npd:%d.%m.%Y})"
+    if d == 0:
+        return f"оплата сегодня ({npd:%d.%m.%Y})"
+    return f"оплатить до {npd:%d.%m.%Y} (через {d} дн.)"
+
+
 def build_context_block(status: dict | None) -> str:
     """Render the grounded customer data the model is allowed to use."""
     if not status:
-        return ("ДАННЫЕ КЛИЕНТА: клиент не найден в базе платежей. "
+        return ("ДАННЫЕ КЛИЕНТА: клиент не найден в базе платежей "
+                "(возможно, новый или ещё не оформил подписку). "
                 "Будь вежлив, уточни детали, ничего не выдумывай.")
     lines = ["ДАННЫЕ КЛИЕНТА:"]
     name = status.get("first_name") or "клиент"
     lines.append(f"- Имя: {name}")
     today = date.today()
-    for g in status.get("groups", []):
-        npd = g["next_payment_date"]
-        d = g["days_until_due"]
-        if d is None:
-            when = "дата оплаты неизвестна"
-        elif d < 0:
-            when = f"ПРОСРОЧЕНО на {-d} дн. (срок был {npd:%d.%m.%Y})"
-        elif d == 0:
-            when = f"оплата сегодня ({npd:%d.%m.%Y})"
-        else:
-            when = f"оплатить до {npd:%d.%m.%Y} (через {d} дн.)"
+    for e in status.get("entries", []):
+        when = _when_phrase(e["days_until_due"], e["next_payment_date"])
+        # "группа 132" already reads as a label; individual/duo carry their own.
+        what = e["label"][0].upper() + e["label"][1:]
         lines.append(
-            f"- Группа {g['group_display_id']} ({g['region']}): "
-            f"{g['amount']}{g['currency']}/мес — {when}"
+            f"- {what} ({e['region']}): {e['amount']}{e['currency']}/мес — {when}"
         )
     lines.append(f"(сегодня {today:%d.%m.%Y})")
+    lines.append(SEGMENT_OBJECTIVE.get(status.get("segment", "unknown"),
+                                       SEGMENT_OBJECTIVE["unknown"]))
     return "\n".join(lines)
 
 
@@ -85,11 +107,13 @@ def needs_escalation(text: str) -> bool:
 
 def outreach_instruction(status: dict) -> str:
     """User-turn instruction that asks the model to draft a first nudge."""
-    overdue = [g for g in status["groups"] if g["is_overdue"]]
-    g = overdue[0] if overdue else status["groups"][0]
+    entries = status.get("entries") or []
+    overdue = [e for e in entries if e["is_overdue"]]
+    e = overdue[0] if overdue else (entries[0] if entries else None)
+    what = f"{e['label']}, {e['amount']}{e['currency']}" if e else "подписку"
     return (
         "Напиши первое короткое дружелюбное сообщение этому клиенту с напоминанием "
-        f"оплатить подписку (группа {g['group_display_id']}, {g['amount']}{g['currency']}). "
+        f"оплатить ({what}). "
         "Не дави, просто по-человечески напомни и предложи помощь с оплатой. "
         "Одно сообщение, без приветственных шаблонов вроде «Здравствуйте, уважаемый»."
     )
