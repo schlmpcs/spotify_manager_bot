@@ -126,7 +126,9 @@ async def run_outreach(bot: Bot, *, force: bool = False) -> dict:
             continue
 
         next_stage = stage + 1            # 1 or 2
-        text = prompts.NUDGE_TEXT[next_stage]
+        # Grounded in this customer's most-urgent overdue plan: amount + region
+        # requisites are quoted in the nudge.
+        text = prompts.nudge_text(next_stage, primary)
         ok = await send_or_approve(
             bot, owner_id, conn_id, cid, "outreach", text, auto=auto,
             username=status.get("username"),

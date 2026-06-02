@@ -217,7 +217,9 @@ def split_call_manager(reply: str) -> tuple[bool, str]:
 
 
 # Staged overdue nudges. These go out verbatim (no LLM) so the wording stays
-# consistent and predictable — the manager owns this exact phrasing.
+# consistent and predictable — the manager owns this exact phrasing. Each nudge
+# is grounded in the customer's own plan: the amount owed and the payment
+# requisites for their region are appended (see `nudge_text`).
 #   Day 1: gentle reminder + ask if they'll renew.
 #   Day 2: firmer — warn that the subscription will be switched off.
 # After the day-2 nudge goes unanswered, no further message is sent to the
@@ -226,4 +228,36 @@ NUDGE_STAGE_1 = "Здравствуйте! Подписка не оплачен�
 NUDGE_STAGE_2 = "Здравствуйте! Подписка всё ещё не оплачена. Отключать вас от подписки?"
 
 # Indexed by the stage we're about to send (1 = first nudge, 2 = second nudge).
-NUDGE_TEXT = {1: NUDGE_STAGE_1, 2: NUDGE_STAGE_2}
+_NUDGE_LEAD = {1: NUDGE_STAGE_1, 2: NUDGE_STAGE_2}
+
+
+def payment_requisites(region: str) -> str:
+    """Payment details quoted to a customer, by region.
+
+    Mirrors the main bot's ``get_payment_info`` ``payment_text``: KZ pays via a
+    Kaspi link, RU via a card transfer (bank + card + recipient).
+    """
+    if (region or "").upper() == "RU":
+        return (
+            "💳 <b>Перевод на карту:</b>\n"
+            f"🏦 Банк: {settings.ru_payment_bank}\n"
+            f"💳 Карта: <code>{settings.ru_payment_card}</code>\n"
+            f"👤 Получатель: {settings.ru_payment_recipient}"
+        )
+    return (
+        "💳 <b>Оплата на Kaspi Bank:</b>\n"
+        f"{settings.kz_payment_link}"
+    )
+
+
+def nudge_text(stage: int, entry: dict) -> str:
+    """Build the staged overdue nudge for ``stage`` (1 or 2), grounded in the
+    customer's own overdue ``entry``: appends the amount owed and the payment
+    requisites for that plan's region."""
+    lead = _NUDGE_LEAD[stage]
+    amount, currency = entry["amount"], entry["currency"]
+    return (
+        f"{lead}\n\n"
+        f"💚 К оплате: <b>{amount}{currency}/мес</b> за подписку Spotify\n\n"
+        f"{payment_requisites(entry['region'])}"
+    )

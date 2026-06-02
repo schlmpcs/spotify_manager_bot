@@ -117,6 +117,19 @@ class Settings(BaseSettings):
     kz_duo_price: int = Field(2500, description="₸/month, KZ duo plan")
     ru_duo_price: int = Field(600, description="₽/month, RU duo plan")
 
+    # --- Payment requisites quoted to overdue customers in nudges ---
+    # Mirror the main bot's get_payment_info `payment_text`: KZ pays via a Kaspi
+    # link, RU via a card transfer (bank + card + recipient).
+    kz_payment_link: str = Field(
+        "https://pay.kaspi.kz/pay/besmk1m9",
+        description="Kaspi payment link quoted to KZ customers in nudges",
+    )
+    ru_payment_card: str = Field("", description="Card number for RU payments")
+    ru_payment_bank: str = Field("VTB Bank", description="Bank name for RU payments")
+    ru_payment_recipient: str = Field(
+        "", description="Recipient name for RU card transfers"
+    )
+
     support_username: str = Field(
         "sptfy_premium", description="Manager/support @username (no @)"
     )
