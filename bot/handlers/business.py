@@ -6,6 +6,7 @@ then arrive here as `business_message` updates; replies go out AS the
 manager via `business_connection_id`.
 """
 
+import asyncio
 import html
 import logging
 import time
@@ -21,6 +22,13 @@ from bot.utils import prompts
 
 logger = logging.getLogger(__name__)
 router = Router(name="business")
+
+# Per-customer debounce. People often split one thought across several quick
+# messages; rather than answer each line, we hold a short window and let the
+# latest message's task generate one reply for the whole burst. A newer message
+# cancels the previous pending task and accumulates its text.
+_pending: dict[int, asyncio.Task] = {}
+_pending_texts: dict[int, list[str]] = {}
 
 
 @router.business_connection()
@@ -98,6 +106,32 @@ async def on_business_message(message: Message, bot: Bot) -> None:
         )
         return
 
+    # Hold a short window for follow-up messages, then reply to the whole burst
+    # at once. The newest message's task supersedes any earlier pending one.
+    _pending_texts.setdefault(customer_id, []).append(message.text)
+    pending = _pending.get(customer_id)
+    if pending and not pending.done():
+        pending.cancel()
+    username = message.from_user.username if message.from_user else None
+    _pending[customer_id] = asyncio.create_task(
+        _debounced_reply(bot, conn_id, owner_id, customer_id, username)
+    )
+
+
+async def _debounced_reply(
+    bot: Bot, conn_id: str, owner_id: int, customer_id: int, username: str | None
+) -> None:
+    """After a quiet window, generate one reply for the customer's message burst."""
+    try:
+        await asyncio.sleep(settings.reply_debounce_seconds)
+    except asyncio.CancelledError:
+        return  # a newer message arrived — its task will answer the full batch
+    # Past the quiet window: claim the batch. We no longer cancel ourselves, so a
+    # message arriving mid-generation starts a fresh cycle rather than aborting.
+    _pending.pop(customer_id, None)
+    texts = _pending_texts.pop(customer_id, [])
+    customer_text = "\n".join(texts).strip()
+
     # Ground the reply in real payment data.
     status = await payments.get_customer_status(customer_id)
 
@@ -108,11 +142,11 @@ async def on_business_message(message: Message, bot: Bot) -> None:
     else:
         auto = settings.auto_reply
 
-    escalate = prompts.needs_escalation(message.text)
+    escalate = prompts.needs_escalation(customer_text)
 
     history = await local.get_history(customer_id, limit=10)
     llm_messages = [{"role": "system", "content": prompts.system_prompt(status, style)}]
-    llm_messages += history  # already ends with the current user message
+    llm_messages += history  # already ends with the customer's latest messages
 
     reply = await llm.chat(llm_messages)
     if not reply:
@@ -121,7 +155,7 @@ async def on_business_message(message: Message, bot: Bot) -> None:
             await bot.send_message(
                 owner_id,
                 f"🤖 Клиент <code>{customer_id}</code> написал, но ИИ не ответил. "
-                f"Ответьте вручную.\n\n«{html.escape(message.text)}»",
+                f"Ответьте вручную.\n\n«{html.escape(customer_text)}»",
             )
         except Exception:  # noqa: BLE001
             pass
@@ -143,7 +177,7 @@ async def on_business_message(message: Message, bot: Bot) -> None:
         bot, owner_id, conn_id, customer_id, "reply", reply,
         auto=auto and not escalate,
         reason=reason,
-        username=message.from_user.username if message.from_user else None,
+        username=username,
     )
 
     if wants_manager:
@@ -151,7 +185,7 @@ async def on_business_message(message: Message, bot: Bot) -> None:
             await bot.send_message(
                 owner_id,
                 f"🙋 Клиент <code>{customer_id}</code> задал вопрос, на который я не "
-                f"смог ответить — нужен ваш ответ.\n\n«{html.escape(message.text)}»",
+                f"смог ответить — нужен ваш ответ.\n\n«{html.escape(customer_text)}»",
             )
         except Exception:  # noqa: BLE001
             pass

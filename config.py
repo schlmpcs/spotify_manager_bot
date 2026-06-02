@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     reply_rate_per_hour: int = Field(
         150, description="Abuse guard: max AI replies to one customer per hour"
     )
+    reply_debounce_seconds: float = Field(
+        2.5,
+        description="Wait this long for more messages before replying. People "
+        "often split one thought across several quick messages — batching them "
+        "lets the bot answer the whole thing at once instead of line by line.",
+    )
     manager_takeover_hours: int = Field(
         24,
         description="When the manager replies to a customer by hand, stay silent "

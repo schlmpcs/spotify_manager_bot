@@ -63,9 +63,10 @@ It only **reads** the main payment bot's PostgreSQL DB for grounding — it neve
 ### Message flow (incoming)
 1. Customer messages the manager → arrives as a `business_message` update in `bot/handlers/business.py`.
 2. The manager's own outgoing messages also arrive here — they are recorded as `assistant` context and **not** replied to (guard: `message.from_user.id == owner_id`).
-3. Customer text is stored, then `payments.get_customer_status(customer_id)` builds the grounding.
-4. `prompts.system_prompt(status, style)` + last ~10 messages → `llm.chat(...)`.
-5. `dispatch.send_or_approve(...)` either auto-sends as the manager or posts a draft to the manager for approval.
+3. Customer text is stored, then a per-customer **debounce** (`REPLY_DEBOUNCE_SECONDS`, ~2.5s) holds for follow-up messages — people often split one thought across several quick messages. A newer message cancels the previous pending task and accumulates its text, so one reply answers the whole burst (`_pending` / `_pending_texts` task maps in `business.py`).
+4. When the quiet window elapses, `payments.get_customer_status(customer_id)` builds the grounding.
+5. `prompts.system_prompt(status, style)` + last ~10 messages → `llm.chat(...)`.
+6. `dispatch.send_or_approve(...)` either auto-sends as the manager or posts a draft to the manager for approval.
 
 ### Sending AS the manager
 All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send_message(chat_id, text, business_connection_id=conn_id)` (and a typing action first). **Telegram only allows messaging users the manager account already has a chat with** — undeliverable sends fall back to a draft (`send_or_approve` catches `TelegramBadRequest` / `TelegramForbiddenError`).
@@ -104,6 +105,7 @@ Stage lives in SQLite `outreach_state` (`stage`, `cycle_due`, `last_sent_at`). `
 | `LOCAL_DB_PATH` | SQLite file for this bot's own state |
 | `AUTO_REPLY` | `true` = auto-send replies; `false` = draft every reply |
 | `REPLY_RATE_PER_MIN`, `REPLY_RATE_PER_HOUR` | Per-customer abuse guard — over the cap, messages are stored but not answered (no LLM call) |
+| `REPLY_DEBOUNCE_SECONDS` | Quiet window to wait for follow-up messages before replying, so a multi-message thought is answered once (default 2.5s) |
 | `PROACTIVE_MODE` | `auto` (send as manager) / `approve` (one-tap) / `off` |
 | `PROACTIVE_OVERDUE_DAYS`, `PROACTIVE_HOUR` | Outreach tuning (overdue threshold; daily run hour). `PROACTIVE_COOLDOWN_DAYS` is legacy — staging now advances one step per calendar day |
 | `KZ_GROUP_PRICE`, `RU_GROUP_PRICE` | Amounts stated to customers |
