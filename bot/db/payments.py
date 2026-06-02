@@ -76,6 +76,24 @@ def _group_entry(row, today: date) -> dict:
     }
 
 
+def _pending_entry(row) -> dict:
+    """A submitted-but-not-yet-connected purchase request (заявка).
+
+    A customer who just paid/applied sits here until an admin approves them in
+    the main bot; only then do they appear in `groups` / `individual_clients`.
+    So this is the only place that knows a connection is in progress.
+    """
+    ctype = row["client_type"]
+    label = _PLAN_LABEL.get(ctype) if ctype else "семейная подписка (группа)"
+    return {
+        "request_id": row["request_id"],
+        "region": (row["region"] or "").upper(),
+        "client_type": ctype,
+        "label": label or "подписка",
+        "created_at": _as_date(row["created_at"]),
+    }
+
+
 def _individual_entry(row, today: date) -> dict:
     """An individual / duo subscription rendered as a unified status entry.
 
@@ -174,6 +192,24 @@ _IND_OVERDUE_TAIL = """ AND COALESCE(
       ) < CURRENT_DATE
       ORDER BY next_payment_date ASC"""
 
+# Pending connection requests (заявки) for a customer — submitted but not yet
+# approved in the main bot. Lets us tell a customer who asks "когда подключат?"
+# that their request is in and being processed, instead of treating them as new.
+_PENDING_SELECT = """
+    SELECT
+        pr.request_id,
+        pr.region,
+        pr.client_type,
+        pr.created_at,
+        u.username,
+        u.first_name
+    FROM purchase_requests pr
+    LEFT JOIN users u ON u.user_id = pr.user_id
+    WHERE pr.user_id = $1 AND pr.status = 'pending'
+    ORDER BY pr.created_at DESC
+"""
+
+
 _GRP_OVERDUE_TAIL = """ AND COALESCE(
         (SELECT next_payment_date FROM payments
          WHERE user_id = ug.user_id AND group_id = g.group_id
@@ -199,19 +235,24 @@ async def get_customer_status(user_id: int) -> Optional[dict]:
         ind = await conn.fetch(
             _IND_SELECT + " AND ic.user_id = $1 ORDER BY next_payment_date", user_id
         )
-    if not grp and not ind:
+        pending = await conn.fetch(_PENDING_SELECT, user_id)
+    if not grp and not ind and not pending:
         return None
     today = date.today()
     entries = [_group_entry(r, today) for r in grp]
     entries += [_individual_entry(r, today) for r in ind]
     # Most urgent first: overdue (most negative days) before far-future / unknown.
     entries.sort(key=lambda e: (e["days_until_due"] is None, e["days_until_due"] or 0))
-    first = grp[0] if grp else ind[0]
+    pending_requests = [_pending_entry(r) for r in pending]
+    # A pending-request-only customer isn't in groups/individual_clients yet, so
+    # fall back to their `users` row (carried on the request) for the name.
+    first = grp[0] if grp else (ind[0] if ind else pending[0])
     return {
         "user_id": user_id,
         "first_name": first["first_name"],
         "username": first["username"],
         "entries": entries,
+        "pending_requests": pending_requests,
         "any_overdue": any(e["is_overdue"] for e in entries),
         "segment": _segment(entries),
     }

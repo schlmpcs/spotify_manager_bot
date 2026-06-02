@@ -41,6 +41,8 @@ DEFAULT_STYLE = (
     "живого менеджера поддержки, а не у бота.\n"
     "Здоровайся только в начале диалога, а не в каждом сообщении; дальше отвечай "
     "по сути, без повторных «здравствуйте».\n"
+    "НИКОГДА не используй «Привет» / «Приветик» — только вежливое «Здравствуйте» "
+    "или «Добрый день/утро/вечер».\n"
     "Эмодзи используй умеренно и к месту (например 💚 🙂 ✅ 📱), чтобы смягчить "
     "тон — не больше одного-двух на сообщение и не в каждом ответе.\n"
     "Всегда подсказывай следующий простой шаг («напишите мне», «сейчас проверю», "
@@ -70,6 +72,8 @@ _SYSTEM = """Ты — менеджер сервиса Spotify Premium (семе�
 менеджер пришлёт реквизиты, и поставь маркер {marker}.
 - Никогда не обещай возвраты, скидки и не подтверждай оплату сам.
 - Пиши на языке клиента (русский по умолчанию, можно казахский/английский).
+- Приветствуй клиента только вежливо: «Здравствуйте» или «Добрый день/утро/вечер». \
+НИКОГДА не используй «Привет» / «Приветик».
 - Коротко. Не пиши простыни. Без официального тона.
 - Форматируй ТОЛЬКО через Telegram HTML, и только когда это правда помогает \
 читаемости (выделить цену, тариф, ключевое слово). Разрешённые теги: \
@@ -148,6 +152,19 @@ SEGMENT_OBJECTIVE = {
                "при необходимости уточни.",
 }
 
+# Appended whenever the customer has a pending connection request. Takes priority
+# over the segment objective: when someone asks "когда подключат подписку?" the
+# answer is grounded in this — заявка принята, подключают в течение рабочего дня.
+PENDING_REQUEST_OBJECTIVE = (
+    "ВАЖНО: у клиента есть активная заявка на подключение — она уже принята и "
+    "обрабатывается, подписка ещё НЕ подключена. Если клиент спрашивает, когда "
+    "подключат/активируют подписку (или почему её ещё нет) — успокой его: заявка "
+    "передана и принята, подписку подключат в течение одного рабочего дня. Если "
+    "есть ещё вопросы — пусть напишет здесь, менеджер скоро свяжется. Не называй "
+    "точное время, не обещай мгновенное подключение и не отправляй клиента "
+    "оформлять заявку заново."
+)
+
 
 def _when_phrase(d: int | None, npd) -> str:
     if d is None:
@@ -184,9 +201,22 @@ def build_context_block(status: dict | None) -> str:
         lines.append(
             f"- {what} ({e['region']}): {e['amount']}{e['currency']}/мес — {when}"
         )
+    pending = status.get("pending_requests") or []
+    if pending:
+        p = pending[0]
+        created = f", подана {p['created_at']:%d.%m.%Y}" if p.get("created_at") else ""
+        lines.append(
+            f"- ЗАЯВКА НА ПОДКЛЮЧЕНИЕ ({p['label']}{created}): принята, "
+            "ещё обрабатывается — подписка пока не подключена."
+        )
     lines.append(f"(сегодня {today:%d.%m.%Y})")
-    lines.append(SEGMENT_OBJECTIVE.get(status.get("segment", "unknown"),
-                                       SEGMENT_OBJECTIVE["unknown"]))
+    # A pending request is what a "когда подключат?" question is really about, so
+    # its objective wins over the payment-stage one.
+    if pending:
+        lines.append(PENDING_REQUEST_OBJECTIVE)
+    else:
+        lines.append(SEGMENT_OBJECTIVE.get(status.get("segment", "unknown"),
+                                           SEGMENT_OBJECTIVE["unknown"]))
     return "\n".join(lines)
 
 
@@ -252,12 +282,15 @@ def payment_requisites(region: str) -> str:
 
 def nudge_text(stage: int, entry: dict) -> str:
     """Build the staged overdue nudge for ``stage`` (1 or 2), grounded in the
-    customer's own overdue ``entry``: appends the amount owed and the payment
-    requisites for that plan's region."""
+    customer's own overdue ``entry``: appends the amount owed, the payment
+    requisites for that plan's region, and a reminder to send the receipt to
+    the purchase bot so the payment is registered."""
     lead = _NUDGE_LEAD[stage]
     amount, currency = entry["amount"], entry["currency"]
     return (
         f"{lead}\n\n"
         f"💚 К оплате: <b>{amount}{currency}/мес</b> за подписку Spotify\n\n"
-        f"{payment_requisites(entry['region'])}"
+        f"{payment_requisites(entry['region'])}\n\n"
+        f"📩 После оплаты отправьте чек боту @{settings.purchase_bot_username}, "
+        f"чтобы оплата зачлась."
     )

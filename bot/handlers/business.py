@@ -31,6 +31,15 @@ _pending: dict[int, asyncio.Task] = {}
 _pending_texts: dict[int, list[str]] = {}
 
 
+def _customer_ref(customer_id: int, username: str | None) -> str:
+    """How a customer is named in manager pings. With a @username the manager can
+    tap straight through to the chat; otherwise fall back to the raw id. Mirrors
+    `dispatch._customer_label`."""
+    if username:
+        return f"@{username} (<code>{customer_id}</code>)"
+    return f"<code>{customer_id}</code>"
+
+
 @router.business_connection()
 async def on_connection(event: BusinessConnection, bot: Bot) -> None:
     """Manager connected (or toggled) the bot on their account."""
@@ -154,8 +163,8 @@ async def _debounced_reply(
         try:
             await bot.send_message(
                 owner_id,
-                f"🤖 Клиент <code>{customer_id}</code> написал, но ИИ не ответил. "
-                f"Ответьте вручную.\n\n«{html.escape(customer_text)}»",
+                f"🤖 Клиент {_customer_ref(customer_id, username)} написал, но ИИ "
+                f"не ответил. Ответьте вручную.\n\n«{html.escape(customer_text)}»",
             )
         except Exception:  # noqa: BLE001
             pass
@@ -184,8 +193,9 @@ async def _debounced_reply(
         try:
             await bot.send_message(
                 owner_id,
-                f"🙋 Клиент <code>{customer_id}</code> задал вопрос, на который я не "
-                f"смог ответить — нужен ваш ответ.\n\n«{html.escape(customer_text)}»",
+                f"🙋 Клиент {_customer_ref(customer_id, username)} задал вопрос, на "
+                f"который я не смог ответить — нужен ваш ответ.\n\n"
+                f"«{html.escape(customer_text)}»",
             )
         except Exception:  # noqa: BLE001
             pass
