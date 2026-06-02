@@ -87,7 +87,15 @@ async def on_business_message(message: Message, bot: Bot) -> None:
     # over: start (or reset) a quiet window so the bot doesn't talk over them.
     if message.from_user and message.from_user.id == owner_id:
         await local.add_message(message.chat.id, "assistant", message.text)
-        await local.record_manager_activity(message.chat.id)
+        # But not every owner message is the manager stepping in by hand:
+        # Telegram Business away/greeting auto-replies arrive with
+        # `is_from_offline`, and messages this bot itself sent on the manager's
+        # behalf carry `sender_business_bot`. Treating those as a takeover would
+        # let one automatic greeting silence the bot for `manager_takeover_hours`.
+        # Only a genuinely hand-typed message opens the quiet window.
+        is_automated = bool(message.is_from_offline) or message.sender_business_bot is not None
+        if not is_automated:
+            await local.record_manager_activity(message.chat.id)
         return
 
     customer_id = message.chat.id
