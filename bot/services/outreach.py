@@ -62,7 +62,9 @@ async def run_outreach(bot: Bot, *, force: bool = False) -> dict:
     """Advance every overdue customer one stage.
 
     Returns {'sent', 'drafted', 'final', 'stage1', 'stage2'}.
-    `force=True` (the /nudge command) runs even when PROACTIVE_MODE=off.
+    `force=True` (the /nudge command) runs even when PROACTIVE_MODE=off and
+    bypasses the once-per-calendar-day guard, so the manager can push the
+    sequence forward on demand even if the daily job already fired today.
     """
     result = {"sent": 0, "drafted": 0, "final": 0, "stage1": 0, "stage2": 0}
 
@@ -109,9 +111,10 @@ async def run_outreach(bot: Bot, *, force: bool = False) -> dict:
         state = await local.get_outreach_state(cid)
         if state and state["cycle_due"] == cycle_due:
             stage = state["stage"]
-            # One stage advance per calendar day — don't double up if /nudge is
-            # run the same day the daily job already fired.
-            if _same_day(state["last_sent_at"], now, tz):
+            # One stage advance per calendar day for the daily cron — don't double
+            # up if it fired already today. A manual /nudge (force=True) overrides
+            # this: the manager explicitly asked to push the sequence forward now.
+            if not force and _same_day(state["last_sent_at"], now, tz):
                 continue
         else:
             stage = 0  # fresh (or first-ever) overdue cycle
