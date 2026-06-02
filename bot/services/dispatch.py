@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
+from urllib.parse import quote
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -73,10 +75,35 @@ def _customer_label(chat_id: int, username: str | None) -> str:
     return f"<code>{chat_id}</code>"
 
 
-def _chat_url(username: str | None) -> str | None:
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain(text: str) -> str:
+    """Strip HTML tags and unescape entities → what a human would actually type.
+    Messages are formatted with Telegram HTML for the *bot* to send; when the
+    manager sends a draft by hand (manual-send card) there's no HTML parsing, so
+    the tags must be removed or the customer would see literal '<b>'."""
+    return html.unescape(_TAG_RE.sub("", text))
+
+
+def _chat_url(username: str | None, text: str | None = None) -> str | None:
     """A tap-to-open link to the customer's chat — only possible from a public
-    @username; a bare numeric id has no public t.me link."""
-    return f"https://t.me/{username}" if username else None
+    @username; a bare numeric id has no public t.me link.
+
+    With `text`, Telegram pre-fills the message input box with it (the manager
+    still taps Send), so the manager opens the chat with the nudge ready to go.
+    Per Telegram's rules a leading '@' must be space-prefixed so it isn't read
+    as an inline query."""
+    base = f"https://t.me/{username}" if username else None
+    if not base or not text:
+        return base
+    if text.startswith("@"):
+        text = " " + text
+    url = f"{base}?text={quote(text)}"
+    # Guard against an over-long button URL (Telegram can reject it, which would
+    # sink the whole owner notification). If so, drop the prefill — the manager
+    # still gets the open-chat link and copies the text from the card.
+    return url if len(url) <= 2000 else base
 
 
 def _manual_reason(err: str | None) -> str:
@@ -99,13 +126,18 @@ def _preview(kind: str, chat_id: int, text: str, reason: str | None,
     note = f"\n⚠️ {html.escape(reason)}" if reason else ""
     label = _customer_label(chat_id, username)
     if manual:
-        # The bot can't deliver this — frame it as a manual send. Put the text in
-        # a tap-to-copy block so the manager can copy → open the chat → paste.
-        return (
-            f"{head} → клиент {label}{note}\n\n"
-            "Скопируйте текст и отправьте от себя:\n"
-            f"<pre>{html.escape(text)}</pre>"
+        # The bot can't deliver this — frame it as a manual send. With a @username
+        # the button below opens the chat with the text already in the input box;
+        # otherwise the manager copies it from the tap-to-copy block.
+        how = (
+            "Нажмите «✍️ Написать» ниже — чат откроется с готовым текстом, "
+            "останется нажать «Отправить»."
+            if username else
+            "Скопируйте текст и отправьте от себя:"
         )
+        # Show the plain text the manager will actually send (no HTML tags).
+        return (f"{head} → клиент {label}{note}\n\n{how}\n"
+                f"<pre>{html.escape(_plain(text))}</pre>")
     # Show the draft exactly as the customer would see it — render the model's
     # HTML. If it turns out to be malformed (parse error on send), we re-render
     # with the text escaped so the owner still sees the draft as raw text.
@@ -136,7 +168,10 @@ async def send_or_approve(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
         manual = True
 
     draft_id = await local.create_draft(owner_id, conn_id, chat_id, kind, text)
-    kb = manual_send_kb(draft_id, _chat_url(username)) if manual else draft_kb(draft_id)
+    # On a manual-send card the open-chat link pre-fills the input with the text
+    # (plain, since the manager sends it by hand), so they just open and tap Send.
+    kb = (manual_send_kb(draft_id, _chat_url(username, _plain(text))) if manual
+          else draft_kb(draft_id))
     try:
         try:
             await bot.send_message(

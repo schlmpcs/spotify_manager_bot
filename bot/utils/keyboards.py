@@ -18,6 +18,8 @@ def manual_send_kb(draft_id: int, chat_url: str | None) -> InlineKeyboardMarkup:
     would just fail again through the same business connection."""
     rows = []
     if chat_url:
-        rows.append([InlineKeyboardButton(text="✍️ Открыть чат", url=chat_url)])
+        # chat_url carries the nudge text as a ?text= param, so tapping this opens
+        # the chat with the message already in the input box (manager taps Send).
+        rows.append([InlineKeyboardButton(text="✍️ Написать", url=chat_url)])
     rows.append([InlineKeyboardButton(text="✖️ Убрать", callback_data=f"d:skip:{draft_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
