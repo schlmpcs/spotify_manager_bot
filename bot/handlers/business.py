@@ -182,9 +182,15 @@ async def _debounced_reply(
     else:
         reason = None
 
+    # When the bot is only buying time ("I'll pass this to the manager"), the
+    # reassurance is safe to send the customer immediately even in draft mode —
+    # it makes no claims and the manager is pinged separately below to give the
+    # real answer. Escalation still always drafts for approval.
+    auto_send = (auto or wants_manager) and not escalate
+
     await send_or_approve(
         bot, owner_id, conn_id, customer_id, "reply", reply,
-        auto=auto and not escalate,
+        auto=auto_send,
         reason=reason,
         username=username,
     )
