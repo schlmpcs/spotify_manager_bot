@@ -67,12 +67,24 @@ def _is_parse_error(e: TelegramBadRequest) -> bool:
     return "can't parse entities" in (e.message or "").lower()
 
 
+# A real Telegram public username: starts with a letter, 5–32 chars, letters/
+# digits/underscore. The payment DB sometimes stores str(user_id) or a short
+# garbage value in the username column when the customer has no public handle —
+# those must NOT be turned into a t.me link (it resolves to "user doesn't exist").
+_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+
+
+def _valid_username(username: str | None) -> bool:
+    return bool(username and _USERNAME_RE.match(username))
+
+
 def _customer_label(chat_id: int, username: str | None) -> str:
-    """How a customer is shown on the draft card. With a @username the manager
-    can tap straight through to the chat; otherwise fall back to the raw id."""
-    if username:
-        return f"@{username} (<code>{chat_id}</code>)"
-    return f"<code>{chat_id}</code>"
+    """How a customer is shown on the draft card. The @handle is shown only when
+    it's a valid public username (the payment DB sometimes stores str(user_id)
+    or a short value there). The id stays a tap-to-copy `<code>` so the card can
+    never fail to send (a tg://user mention the bot can't resolve might)."""
+    handle = f"@{username} " if _valid_username(username) else ""
+    return f"{handle}(<code>{chat_id}</code>)"
 
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -87,15 +99,18 @@ def _plain(text: str) -> str:
 
 
 def _chat_url(username: str | None, text: str | None = None) -> str | None:
-    """A tap-to-open link to the customer's chat — only possible from a public
-    @username; a bare numeric id has no public t.me link.
+    """A prefilled-message link to the customer's chat. Telegram only supports
+    pre-filling the input box (`?text=`) on a public-username link, so this needs
+    a *valid* @username — a numeric id or stale value has no working t.me link
+    (those rely on the `tg://user?id=` open-chat link in the card instead).
 
-    With `text`, Telegram pre-fills the message input box with it (the manager
-    still taps Send), so the manager opens the chat with the nudge ready to go.
-    Per Telegram's rules a leading '@' must be space-prefixed so it isn't read
-    as an inline query."""
-    base = f"https://t.me/{username}" if username else None
-    if not base or not text:
+    With `text`, Telegram pre-fills the input box (the manager still taps Send).
+    Per Telegram's rules a leading '@' must be space-prefixed so it isn't read as
+    an inline query."""
+    if not _valid_username(username):
+        return None
+    base = f"https://t.me/{username}"
+    if not text:
         return base
     if text.startswith("@"):
         text = " " + text
@@ -126,14 +141,16 @@ def _preview(kind: str, chat_id: int, text: str, reason: str | None,
     note = f"\n⚠️ {html.escape(reason)}" if reason else ""
     label = _customer_label(chat_id, username)
     if manual:
-        # The bot can't deliver this — frame it as a manual send. With a @username
-        # the button below opens the chat with the text already in the input box;
-        # otherwise the manager copies it from the tap-to-copy block.
+        # The bot can't deliver this — frame it as a manual send. A valid public
+        # @username gets the «✍️ Написать» button that opens the chat with the
+        # text already in the input box; otherwise the manager opens the chat via
+        # the id link above and copies the text from the tap-to-copy block.
         how = (
             "Нажмите «✍️ Написать» ниже — чат откроется с готовым текстом, "
             "останется нажать «Отправить»."
-            if username else
-            "Скопируйте текст и отправьте от себя:"
+            if _valid_username(username) else
+            "У клиента нет @username — откройте чат вручную, скопируйте текст "
+            "и отправьте от себя:"
         )
         # Show the plain text the manager will actually send (no HTML tags).
         return (f"{head} → клиент {label}{note}\n\n{how}\n"
