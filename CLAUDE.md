@@ -69,7 +69,7 @@ It only **reads** the main payment bot's PostgreSQL DB for grounding — it neve
 6. `dispatch.send_or_approve(...)` either auto-sends as the manager or posts a draft to the manager for approval.
 
 ### Sending AS the manager
-All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send_message(chat_id, text, business_connection_id=conn_id)` (and a typing action first). **Telegram only allows messaging users the manager account already has a chat with** — undeliverable sends fall back to a draft (`send_or_approve` catches `TelegramBadRequest` / `TelegramForbiddenError`).
+All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send_message(chat_id, text, business_connection_id=conn_id)` (and a typing action first). **A connected business bot may only send to a chat that had an incoming message from the customer in the last 24h** (that is all the `can_reply` right grants; outside the window Telegram returns `BUSINESS_PEER_USAGE_MISSING`). When delivery fails, `send_or_approve` falls back to a **manual-send card**: it drops the "Отправить" button (a re-send would hit the same limit), translates the raw error into a plain-language reason (`_manual_reason`), shows the text in a tap-to-copy `<pre>` block, and offers an "✍️ Открыть чат" link (`manual_send_kb`, only when the customer's @username is known) so the manager sends it by hand from their own account — which has no 24h limit.
 
 ### Proactive outreach (staged overdue nudges)
 `outreach.run_outreach(bot)` runs **daily at `PROACTIVE_HOUR` in `BOT_TIMEZONE`** (Asia/Almaty = UTC+5, so noon Almaty) via APScheduler, or on demand via `/nudge` (which passes `force=True` to run even when `PROACTIVE_MODE=off`). It pulls overdue customers from Postgres (**both** overdue group slots and overdue individual/duo plans), dedupes per user, and advances each one **one stage per calendar day**:
@@ -162,7 +162,7 @@ docker compose up -d --build
 
 ## Important Notes
 
-- **The proactive hard limit:** a personal account cannot cold-DM a user it has no prior chat with (Telegram anti-spam). Undeliverable nudges become drafts — this is expected, not a bug.
+- **The proactive hard limit:** a connected business bot can only message a customer who wrote to the manager **within the last 24 hours** (the precise meaning of `can_reply`). Overdue customers have usually gone quiet, so most nudges **cannot** be delivered by the bot and become **manual-send cards** — this is a Telegram limit, not a bug, and no setting/right lifts it. The manager sends those by hand from their own account (no 24h limit). Tapping a draft's "Отправить"/"Изменить" re-runs `deliver()` through the same connection, so it would fail again for an out-of-window customer — hence the manual-send card omits those buttons.
 - **One LLM failure ≠ a bad message:** if `llm.chat` returns `None`, nothing is sent to the customer; the manager is pinged to reply manually.
 - **`business_message` is bidirectional** — both customer and manager messages arrive; always guard on `from_user.id` before replying.
 - **Inspiration:** the business-connection wiring shape is adapted from `github.com/rlxrd/assist_ai_bot`, but this project adds grounding, proactive outreach, escalation, local LLM, and integration with the payment DB.
