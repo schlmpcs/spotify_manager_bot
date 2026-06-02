@@ -78,7 +78,7 @@ All customer-facing sends go through `dispatch.deliver()`, which calls `bot.send
 - **Stage 2 (day 2):** sends `prompts.NUDGE_STAGE_2`.
 - **Stage 3 (day 3):** no customer message — instead the manager gets a single summary (`_final_report`) listing everyone who still hasn't paid after both nudges. Stage stays at 3 (no repeats).
 
-Stage lives in SQLite `outreach_state` (`stage`, `cycle_due`, `last_sent_at`). `cycle_due` is the most-urgent overdue entry's `next_payment_date`: when a customer pays and later lapses again, the new due date differs → the sequence **restarts at stage 1**. The `last_sent_at` same-day guard (in `BOT_TIMEZONE`) prevents the **daily cron** from advancing a customer twice in one calendar day; a manual `/nudge` (`force=True`) bypasses this guard so the manager can push the sequence forward on demand. Nudges are sent/approved under the first connected owner identity; `log_outreach()` keeps an append-only audit trail. The nudge texts are **fixed** (the manager owns the wording) — this is the one customer-facing path that is *not* LLM-generated.
+Stage lives in SQLite `outreach_state` (`stage`, `cycle_due`, `last_sent_at`). `cycle_due` is the most-urgent overdue entry's `next_payment_date`: when a customer pays and later lapses again, the new due date differs → the sequence **restarts at stage 1**. The `last_sent_at` same-day guard (in `BOT_TIMEZONE`) prevents the **daily cron** from advancing a customer twice in one calendar day. A manual `/nudge` (`force=True`) is **unlimited**: it ignores both the same-day guard and the stage cap, re-sending a reminder to every overdue customer on demand (stage 1 the first time in a cycle, the firmer stage 2 thereafter). The gentle staged progression above (stop after two nudges, then notify the manager) applies only to the automatic cron. Nudges are sent/approved under the first connected owner identity; `log_outreach()` keeps an append-only audit trail. The nudge texts are **fixed** (the manager owns the wording) — this is the one customer-facing path that is *not* LLM-generated.
 
 ### Grounding (never invent facts)
 `bot/db/payments.py` covers **all customer types** and merges them into one `status` dict:
@@ -122,7 +122,7 @@ Per-owner overrides (style prompt, auto-reply) live in the SQLite `owner_setting
 | `/status` | Connection state, auto-reply mode, proactive mode, style |
 | `/style` | FSM: capture the manager's writing style (stored per-owner) |
 | `/auto on\|off` | Toggle auto-send vs draft approval |
-| `/nudge` | Run overdue-customer outreach immediately (forces even if `PROACTIVE_MODE=off`) |
+| `/nudge` | Run overdue-customer outreach immediately — unlimited: ignores the once-per-day guard and stage cap, re-nudging every overdue customer (forces even if `PROACTIVE_MODE=off`) |
 
 Draft approval is via inline buttons (`d:send:<id>` / `d:edit:<id>` / `d:skip:<id>`) handled in `owner.py`.
 

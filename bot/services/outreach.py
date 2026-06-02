@@ -11,6 +11,10 @@ The nudge texts are fixed (no LLM) so the wording stays consistent. Stage is
 tracked per overdue *cycle* (keyed on the due date): once a customer pays and
 later lapses again, the new due date restarts the sequence from day 1.
 
+This staged, one-step-per-day progression is for the automatic daily cron. A
+manual /nudge (force=True) is unlimited: it ignores the day throttle and the
+stage cap and re-sends a reminder to every overdue customer on demand.
+
 Telegram only lets a personal account message users it already has a chat with,
 so a nudge that can't be delivered falls back to a draft the manager sees
 (handled inside dispatch.send_or_approve)."""
@@ -62,9 +66,12 @@ async def run_outreach(bot: Bot, *, force: bool = False) -> dict:
     """Advance every overdue customer one stage.
 
     Returns {'sent', 'drafted', 'final', 'stage1', 'stage2'}.
-    `force=True` (the /nudge command) runs even when PROACTIVE_MODE=off and
-    bypasses the once-per-calendar-day guard, so the manager can push the
-    sequence forward on demand even if the daily job already fired today.
+    `force=True` (the /nudge command) runs even when PROACTIVE_MODE=off and has
+    no limit: it ignores both the once-per-calendar-day guard and the stage cap,
+    sending every overdue customer a reminder right now (stage 1 the first time
+    in a cycle, the firmer stage 2 thereafter). The gentle staged progression
+    (stop after two nudges, then notify the manager) applies only to the
+    automatic daily cron (force=False).
     """
     result = {"sent": 0, "drafted": 0, "final": 0, "stage1": 0, "stage2": 0}
 
@@ -118,6 +125,25 @@ async def run_outreach(bot: Bot, *, force: bool = False) -> dict:
                 continue
         else:
             stage = 0  # fresh (or first-ever) overdue cycle
+
+        if force:
+            # Manual /nudge has no limit: always send a reminder to every overdue
+            # customer right now, regardless of stage or how recently we nudged.
+            # First time this cycle → stage 1; after that the firmer stage-2 text,
+            # re-sent on every /nudge until the customer pays (which resets the
+            # cycle). The gentle "stop after 2 + notify manager" staging below is
+            # only for the automatic daily cron.
+            next_stage = 1 if stage == 0 else 2
+            text = prompts.nudge_text(next_stage, primary)
+            ok = await send_or_approve(
+                bot, owner_id, conn_id, cid, "outreach", text, auto=auto,
+                username=status.get("username"),
+            )
+            await local.set_outreach_state(cid, next_stage, cycle_due)
+            await local.log_outreach(cid)
+            result["sent" if ok else "drafted"] += 1
+            result[f"stage{next_stage}"] += 1
+            continue
 
         if stage >= 3:
             continue  # both nudges sent and manager already notified this cycle
