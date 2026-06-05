@@ -50,7 +50,7 @@ DEFAULT_STYLE = (
     "Без канцелярита и сухих шаблонов; пиши живым, человеческим языком."
 )
 
-_SYSTEM = """Ты — менеджер сервиса Spotify Premium (семейная подписка) в Казахстане и России. \
+_SYSTEM = """Ты — менеджер сервиса Spotify Premium в Казахстане и России. \
 Ты отвечаешь клиентам ОТ ПЕРВОГО ЛИЦА, как живой человек-менеджер, а не бот.
 
 Стиль общения менеджера:
@@ -109,8 +109,6 @@ def price_list() -> str:
     bot = settings.purchase_bot_username
     return (
         "ТАРИФЫ (актуальные цены, можно называть клиентам):\n"
-        f"- Семейная подписка (слот в общей группе): "
-        f"{settings.kz_group_price}₸/мес (Казахстан) · {settings.ru_group_price}₽/мес (Россия)\n"
         f"- Индивидуальная подписка: "
         f"{settings.kz_individual_price}₸/мес (Казахстан) · {settings.ru_individual_price}₽/мес (Россия)\n"
         f"- Duo (на двоих): "
@@ -122,12 +120,10 @@ def price_list() -> str:
         "━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "🇰🇿 <b>Казахстан</b>\n"
-        f"   👨‍👩‍👧‍👦 Семейная — {settings.kz_group_price}₸ / мес\n"
         f"   👤 Индивидуальная — {settings.kz_individual_price}₸ / мес\n"
         f"   👥 Duo (на двоих) — {settings.kz_duo_price}₸ / мес\n"
         "\n"
         "🇷🇺 <b>Россия</b>\n"
-        f"   👨‍👩‍👧‍👦 Семейная — {settings.ru_group_price}₽ / мес\n"
         f"   👤 Индивидуальная — {settings.ru_individual_price}₽ / мес\n"
         f"   👥 Duo (на двоих) — {settings.ru_duo_price}₽ / мес\n"
         "\n"
