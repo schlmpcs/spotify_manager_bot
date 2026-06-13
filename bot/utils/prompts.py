@@ -107,14 +107,21 @@ Telegram НЕ поддерживает HTML-списки и заголовки (
 """
 
 
-def price_list() -> str:
-    """General tariff block — real config prices the bot may quote to anyone.
+# Marker the model emits instead of typing out a full price list. The bot swaps
+# it for `price_table()` — a perfectly-aligned, deterministic table. Done this way
+# because the model can't reliably reproduce exact HTML/whitespace (it flattens
+# blockquotes and column alignment), but it CAN reliably emit a short literal
+# marker (same trick as CALL_MANAGER_MARKER).
+PRICE_TABLE_MARKER = "[[PRICE_TABLE]]"
 
-    Includes a canonical, customer-facing layout (Telegram HTML, grouped by
-    country) the model should reuse verbatim when a customer asks for *all*
-    prices. The data lives in ``settings`` — never hard-code amounts here.
-    """
-    bot = settings.purchase_bot_username
+
+def price_list() -> str:
+    """General tariff block injected into the prompt — real config prices the bot
+    may quote to anyone. The data lives in ``settings`` — never hard-code amounts.
+
+    For a *full* price-list request the model must NOT type the table itself
+    (it mangles the formatting); it emits ``PRICE_TABLE_MARKER`` and the bot
+    substitutes the deterministic ``price_table()``."""
     return (
         "ТАРИФЫ (актуальные цены, можно называть клиентам):\n"
         f"- Индивидуальная подписка: "
@@ -122,21 +129,50 @@ def price_list() -> str:
         f"- Duo (на двоих): "
         f"{settings.kz_duo_price}₸/мес (Казахстан) · {settings.ru_duo_price}₽/мес (Россия)\n"
         "\n"
-        "Когда клиент просит ПОЛНЫЙ список цен — оформи ответ ровно в этом виде "
-        "(Telegram HTML, каждая страна — отдельная цитата-карточка <blockquote>), "
-        "подставив только нужное:\n"
-        "🎵 <b>Цены на подписки Spotify Premium</b>\n"
-        "\n"
-        "<blockquote>🇰🇿 <b>Казахстан</b>\n"
-        f"👤 Индивидуальная — <b>{settings.kz_individual_price}₸</b> / мес\n"
-        f"👥 Duo (на двоих) — <b>{settings.kz_duo_price}₸</b> / мес</blockquote>\n"
-        "\n"
-        "<blockquote>🇷🇺 <b>Россия</b>\n"
-        f"👤 Индивидуальная — <b>{settings.ru_individual_price}₽</b> / мес\n"
-        f"👥 Duo (на двоих) — <b>{settings.ru_duo_price}₽</b> / мес</blockquote>\n"
-        "\n"
-        f"✨ Хотите подключиться? Напишите боту 👉 @{bot}"
+        "Когда клиент просит ПОЛНЫЙ список цен / прайс / «сколько стоят подписки» — "
+        f"НЕ печатай цены и таблицу сам. Просто вставь на ОТДЕЛЬНОЙ строке маркер "
+        f"{PRICE_TABLE_MARKER} — система сама подставит красиво оформленную таблицу "
+        "с актуальными ценами. Можно добавить короткую живую фразу до маркера "
+        "(например «Конечно, вот наши тарифы:»). Если же спрашивают про ОДИН "
+        "конкретный тариф (например «сколько Duo в Казахстане») — можно просто "
+        "назвать эту цену словами, без маркера."
     )
+
+
+def price_table() -> str:
+    """Deterministic, perfectly-aligned customer-facing price table.
+
+    Built entirely in code (never retyped by the model), so the formatting always
+    renders. Uses a monospace <pre> block — the only reliable way for a bot to
+    show an aligned grid (Telegram's native tables aren't exposed via bot HTML).
+    Emoji are kept OUT of the <pre> cells so the columns stay aligned."""
+    rows = [
+        ("Тариф", "Казахстан", "Россия"),
+        ("Индивид.", f"{settings.kz_individual_price}₸", f"{settings.ru_individual_price}₽"),
+        ("Duo", f"{settings.kz_duo_price}₸", f"{settings.ru_duo_price}₽"),
+    ]
+    w0 = max(len(r[0]) for r in rows)
+    w1 = max(len(r[1]) for r in rows)
+    w2 = max(len(r[2]) for r in rows)
+
+    def _row(r: tuple[str, str, str]) -> str:
+        return f"{r[0]:<{w0}}  {r[1]:>{w1}}  {r[2]:>{w2}}"
+
+    head = _row(rows[0])
+    table = "\n".join([head, "─" * len(head), *[_row(r) for r in rows[1:]]])
+    bot = settings.purchase_bot_username
+    return (
+        "🎵 <b>Цены на Spotify Premium</b>\n\n"
+        f"<pre>{table}</pre>\n"
+        f"✨ Подключиться → @{bot}"
+    )
+
+
+def insert_price_table(reply: str) -> str:
+    """Swap the model's ``PRICE_TABLE_MARKER`` for the real deterministic table."""
+    if PRICE_TABLE_MARKER not in reply:
+        return reply
+    return reply.replace(PRICE_TABLE_MARKER, price_table()).strip()
 
 
 # Per-segment OBJECTIVE — frames *what* the message should achieve and *which

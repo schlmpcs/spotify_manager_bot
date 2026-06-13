@@ -182,6 +182,8 @@ async def _debounced_reply(
     # We still send the customer the reassurance, but always ping the manager so
     # they actually follow up — the bot must not be the last word here.
     wants_manager, reply = prompts.split_call_manager(reply)
+    # Swap a price-list request marker for the deterministic, aligned table.
+    reply = prompts.insert_price_table(reply)
 
     if wants_manager:
         reason = "клиент ждёт ответа от менеджера"

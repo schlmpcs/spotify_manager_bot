@@ -5,6 +5,7 @@ import json
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -154,6 +155,26 @@ async def capture_emoji_ids(message: Message, state: FSMContext) -> None:
         "Ключ — обычный эмодзи, который бот заменит на ваш премиум-вариант "
         "в своих сообщениях. Клиентам без Premium покажется обычный эмодзи."
     )
+    # Diagnostic: render the emoji in a message the bot sends DIRECTLY (not via
+    # the business connection). If they animate here but stay plain for customers,
+    # the blocker is Telegram's business-account limit, not the IDs.
+    test = " ".join(
+        f'<tg-emoji emoji-id="{i}">{g}</tg-emoji>' for g, i in pairs.items()
+    )
+    try:
+        await message.answer(
+            f"🔎 Проверка: {test}\n\n"
+            "Если эмодзи выше анимированы — ID рабочие и у вас есть Premium. "
+            "Если в чатах с клиентами они всё равно показываются обычными — это "
+            "ограничение Telegram: кастомные эмодзи от бота не отображаются в "
+            "сообщениях, отправленных от имени бизнес-аккаунта."
+        )
+    except TelegramBadRequest:
+        await message.answer(
+            "⚠️ Не удалось показать эмодзи (Telegram отклонил кастомные эмодзи). "
+            "Обычно это значит, что у аккаунта-владельца бота нет Telegram Premium "
+            "или ID недействителен."
+        )
 
 
 # ── draft approval callbacks (not owner-filtered above, so filter here) ─────
