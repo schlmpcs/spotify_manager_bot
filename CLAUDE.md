@@ -109,6 +109,7 @@ Stage lives in SQLite `outreach_state` (`stage`, `cycle_due`, `last_sent_at`). `
 | `PROACTIVE_MODE` | `auto` (send as manager) / `approve` (one-tap) / `off` |
 | `PROACTIVE_OVERDUE_DAYS`, `PROACTIVE_HOUR` | Outreach tuning (overdue threshold; daily run hour). `PROACTIVE_COOLDOWN_DAYS` is legacy — staging now advances one step per calendar day |
 | `KZ_GROUP_PRICE`, `RU_GROUP_PRICE` | Amounts stated to customers |
+| `CUSTOM_EMOJI_IDS` | JSON `{glyph: custom_emoji_id}` map; upgrades those glyphs to Premium animated emoji in sent messages (needs owner Premium). Empty = off. Harvest IDs via `/emojiid` |
 
 Per-owner overrides (style prompt, auto-reply) live in the SQLite `owner_settings` table and take precedence over the global `.env` defaults.
 
@@ -123,6 +124,7 @@ Per-owner overrides (style prompt, auto-reply) live in the SQLite `owner_setting
 | `/style` | FSM: capture the manager's writing style (stored per-owner) |
 | `/auto on\|off` | Toggle auto-send vs draft approval |
 | `/nudge` | Run overdue-customer outreach immediately — unlimited: ignores the once-per-day guard and stage cap, re-nudging every overdue customer (forces even if `PROACTIVE_MODE=off`) |
+| `/emojiid` | FSM: the owner sends the Premium emoji they want; the bot replies with each `custom_emoji_id` and a ready-to-paste `CUSTOM_EMOJI_IDS` line for `.env` |
 
 Draft approval is via inline buttons (`d:send:<id>` / `d:edit:<id>` / `d:skip:<id>`) handled in `owner.py`.
 
@@ -134,6 +136,7 @@ Draft approval is via inline buttons (`d:send:<id>` / `d:edit:<id>` / `d:skip:<i
 - **Read-only on the payment DB.** This bot must never `INSERT`/`UPDATE`/`DELETE` against the payment bot's Postgres.
 - **All grounding goes through `bot/db/payments.py`** and must mirror the main bot's payment-status logic — keep the `COALESCE(... , groups.next_payment_date)` + `is_phantom = FALSE` shape in sync if the main bot changes.
 - **Customer-facing sends only via `dispatch.deliver` / `send_or_approve`** — never call `bot.send_message(..., business_connection_id=...)` directly from handlers, so escalation/fallback stays centralised.
+- **Rich formatting:** messages use Telegram HTML including `<blockquote>` (payment requisites and the price-list cards are wrapped in one) — supported for everyone, no Premium needed. `dispatch.deliver` runs every outgoing text through `emoji.decorate` (`bot/utils/emoji.py`), which upgrades any glyph mapped in `CUSTOM_EMOJI_IDS` to a Premium **custom (animated) emoji** (`<tg-emoji emoji-id="…">`). That only renders when the bot **owner has Telegram Premium**; if Telegram rejects it, `deliver` resends the un-decorated text and `emoji.note_failure()` turns the upgrade off for the rest of the run. Empty map = feature off (the default). Manual-send cards strip all tags via `_plain`, so hand-sent text stays plain.
 - **The model must not invent payment facts.** Any new info the customer can ask about must be added to the context block in `prompts.build_context_block`, not left to the model.
 - **New FSM states** → `bot/utils/states.py`; **new keyboards** → `bot/utils/keyboards.py`; **new env vars** → `config.py` + `.env.example`.
 - **Owner-only handlers** are gated by `router.message.filter(F.from_user.id.in_(settings.owner_ids))` in `owner.py`; callback handlers re-check `settings.owner_ids` manually.

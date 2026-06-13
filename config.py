@@ -6,7 +6,7 @@ and answers / nudges customers on the manager's behalf, using free LLMs via
 OpenRouter and grounding every message in the main bot's PostgreSQL database.
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import quote
 
 from pydantic import SecretStr, Field
@@ -106,6 +106,18 @@ class Settings(BaseSettings):
         "sequence now advances at most one step per calendar day instead.",
     )
     bot_timezone: str = Field("Asia/Almaty", description="Timezone")
+
+    # --- Premium custom (animated) emoji ---
+    # Map of plain emoji glyph → Telegram custom_emoji_id. When non-empty, the bot
+    # upgrades those glyphs to animated Premium emoji in every message it sends
+    # (see bot/utils/emoji.py). Telegram only allows this when the bot's OWNER
+    # account has Telegram Premium (Bot API, Feb 2026). Harvest the IDs with the
+    # /emojiid owner command, then paste them here as JSON. Empty = feature off.
+    # Example: CUSTOM_EMOJI_IDS={"💚":"5368324170671202286","🎵":"5377498389991979883"}
+    custom_emoji_ids: Dict[str, str] = Field(
+        default_factory=dict,
+        description="JSON map of emoji glyph → custom_emoji_id (get via /emojiid)",
+    )
 
     # --- Pricing defaults used to state amounts owed + quote prices (grounding) ---
     # Mirror the main bot's settings.py. The bot may state these to anyone,

@@ -1,5 +1,7 @@
 """Commands for the manager (owner) to configure and control the bot."""
 
+import html
+import json
 import logging
 
 from aiogram import Bot, F, Router
@@ -29,7 +31,7 @@ async def cmd_start(message: Message) -> None:
         "(или <b>Автоматизация чатов</b>).\n"
         f"2. Добавьте этого бота и выберите чаты.\n"
         "3. Включите право «Отвечать на сообщения».\n\n"
-        "Команды: /status · /style · /auto · /nudge"
+        "Команды: /status · /style · /auto · /nudge · /emojiid"
     )
 
 
@@ -99,6 +101,58 @@ async def cmd_nudge(message: Message, bot: Bot) -> None:
         f"1-е напоминание: {r['stage1']} · 2-е напоминание: {r['stage2']}\n"
         f"Отправлено: {r['sent']} · на подтверждении: {r['drafted']}\n"
         f"Передано вам (не оплатили после 2-го): {r['final']}"
+    )
+
+
+@router.message(Command("emojiid"))
+async def cmd_emojiid(message: Message, state: FSMContext) -> None:
+    """Harvest custom_emoji_id values: the owner sends a message with the Premium
+    emoji they want, and the bot replies with a ready-to-paste CUSTOM_EMOJI_IDS."""
+    await state.set_state(OwnerStates.getting_emoji_ids)
+    await message.answer(
+        "🎨 Пришлите <b>одним сообщением</b> премиум-эмодзи (анимированные), "
+        "которые хотите использовать в сообщениях бота — я верну их ID для "
+        "<code>CUSTOM_EMOJI_IDS</code>.\n\n"
+        "Вставлять такие эмодзи можно только с Telegram Premium. Можно прислать "
+        "сразу несколько подряд. (/cancel — отмена)"
+    )
+
+
+@router.message(OwnerStates.getting_emoji_ids, Command("cancel"))
+async def cancel_emojiid(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Отменено.")
+
+
+@router.message(OwnerStates.getting_emoji_ids)
+async def capture_emoji_ids(message: Message, state: FSMContext) -> None:
+    text = message.text or message.caption or ""
+    ents = [e for e in (message.entities or message.caption_entities or [])
+            if e.type == "custom_emoji"]
+    if not ents:
+        await message.answer(
+            "Не вижу премиум-эмодзи в сообщении. Пришлите анимированные эмодзи "
+            "(нужен Telegram Premium) или /cancel."
+        )
+        return
+    # offsets/lengths are UTF-16 based — extract_from handles that correctly.
+    pairs: dict[str, str] = {}
+    for e in ents:
+        glyph = e.extract_from(text)
+        if glyph:
+            pairs[glyph] = e.custom_emoji_id
+    await state.clear()
+    lines = "\n".join(f"{g} → <code>{i}</code>" for g, i in pairs.items())
+    merged = dict(settings.custom_emoji_ids)
+    merged.update(pairs)
+    snippet = json.dumps(merged, ensure_ascii=False)
+    await message.answer(
+        f"✅ Нашёл {len(pairs)} эмодзи:\n{lines}\n\n"
+        "Добавьте в <code>.env</code> и перезапустите бота "
+        "(уже сохранённые сохранены, новые добавлены):\n"
+        f"<code>CUSTOM_EMOJI_IDS={html.escape(snippet)}</code>\n\n"
+        "Ключ — обычный эмодзи, который бот заменит на ваш премиум-вариант "
+        "в своих сообщениях. Клиентам без Premium покажется обычный эмодзи."
     )
 
 

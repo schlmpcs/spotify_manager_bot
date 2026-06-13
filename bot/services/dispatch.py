@@ -14,6 +14,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.db import local
+from bot.utils import emoji
 from bot.utils.keyboards import draft_kb, manual_send_kb
 
 logger = logging.getLogger(__name__)
@@ -36,21 +37,32 @@ async def deliver(bot: Bot, conn_id: str, chat_id: int, text: str,
             except TelegramBadRequest:
                 pass
         # The model is told to format with Telegram HTML (<b>, <i>, …), so we
-        # send under the bot's global HTML default. If it slips and emits a
-        # stray '<'/'&' or a broken tag, Telegram rejects the message with a
-        # parse error — fall back to sending the text verbatim as plain text so
-        # the customer still gets the reply.
+        # send under the bot's global HTML default. `emoji.decorate` additionally
+        # upgrades mapped glyphs to Premium custom emoji (no-op when unconfigured).
+        # Two things can still go wrong on send:
+        #   • a stray '<'/'&' or broken tag → parse error → resend the ORIGINAL
+        #     text verbatim as plain text so the customer still gets the reply;
+        #   • the custom emoji are rejected (owner lacks Premium / bad id / not
+        #     allowed over this connection) → resend the un-decorated HTML and
+        #     turn the upgrade off for the rest of the run.
+        body = emoji.decorate(text)
         try:
             await bot.send_message(
-                chat_id=chat_id, text=text, business_connection_id=conn_id,
+                chat_id=chat_id, text=body, business_connection_id=conn_id,
             )
         except TelegramBadRequest as e:
-            if not _is_parse_error(e):
+            if _is_parse_error(e):
+                await bot.send_message(
+                    chat_id=chat_id, text=text, business_connection_id=conn_id,
+                    parse_mode=None,
+                )
+            elif body != text and _is_custom_emoji_error(e):
+                emoji.note_failure()
+                await bot.send_message(
+                    chat_id=chat_id, text=text, business_connection_id=conn_id,
+                )
+            else:
                 raise
-            await bot.send_message(
-                chat_id=chat_id, text=text, business_connection_id=conn_id,
-                parse_mode=None,
-            )
         return True, None
     except TelegramForbiddenError as e:
         return False, f"forbidden: {e.message}"
@@ -65,6 +77,15 @@ async def deliver(bot: Bot, conn_id: str, chat_id: int, text: str,
 def _is_parse_error(e: TelegramBadRequest) -> bool:
     """True when Telegram rejected the message because of bad HTML entities."""
     return "can't parse entities" in (e.message or "").lower()
+
+
+def _is_custom_emoji_error(e: TelegramBadRequest) -> bool:
+    """True when the rejection looks like it's about the custom-emoji entities
+    (owner not Premium, invalid id, or not permitted over this connection).
+    Broad on purpose — the only consequence of a false positive is one resend
+    of the same text without the emoji upgrade."""
+    m = (e.message or "").lower()
+    return "custom emoji" in m or "custom_emoji" in m or "premium" in m
 
 
 # A real Telegram public username: starts with a letter, 5–32 chars, letters/
