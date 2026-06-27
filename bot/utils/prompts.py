@@ -199,6 +199,25 @@ PENDING_REQUEST_OBJECTIVE = (
     "оформлять заявку заново."
 )
 
+# Appended only for customers who have a GROUP (family) plan. Spotify has begun
+# disconnecting family accounts, so a group subscriber who reports that their
+# subscription stopped working must be told this honestly and offered the two
+# real paths (switch to individual via the bot, or talk to the manager) — NOT
+# punted with the call-manager marker as if it were an unknown technical fault.
+GROUP_DISCONNECT_GUIDANCE = (
+    "ВАЖНО (у клиента ГРУППОВАЯ / семейная подписка): если клиент пишет, что его "
+    "подписка отключилась / слетела / перестала работать / его выкинуло из семьи — "
+    "это НЕ техническая поломка и НЕ повод сразу передавать вопрос менеджеру. "
+    "Объясни честно и спокойно: Spotify начал отключать пользователей семейных "
+    "(групповых) подписок, и быстро восстановить групповое подключение, скорее "
+    "всего, не получится. Предложи клиенту два варианта: 1) подключить "
+    f"индивидуальную подписку через бота @{settings.purchase_bot_username} — она "
+    "стабильнее и не зависит от семьи; 2) написать менеджеру, чтобы он подсказал "
+    "по ситуации. Не обещай восстановление группы и не называй сроков. Маркер "
+    f"{CALL_MANAGER_MARKER} в этом случае НЕ ставь — ты сам объясняешь ситуацию, "
+    "менеджер только как один из вариантов по желанию клиента."
+)
+
 
 def _when_phrase(d: int | None, npd) -> str:
     if d is None:
@@ -251,6 +270,8 @@ def build_context_block(status: dict | None) -> str:
     else:
         lines.append(SEGMENT_OBJECTIVE.get(status.get("segment", "unknown"),
                                            SEGMENT_OBJECTIVE["unknown"]))
+    if any(e.get("kind") == "group" for e in status.get("entries", [])):
+        lines.append(GROUP_DISCONNECT_GUIDANCE)
     return "\n".join(lines)
 
 
