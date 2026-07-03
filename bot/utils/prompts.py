@@ -218,6 +218,28 @@ GROUP_DISCONNECT_GUIDANCE = (
     "менеджер только как один из вариантов по желанию клиента."
 )
 
+# Appended only for customers on an INDIVIDUAL or DUO plan. If their subscription
+# fell off and they say they've paid, they don't need the manager — the purchase
+# bot now has a one-tap "🔌 Переподключить" button that files the reconnect request
+# itself (gated to active+paid clients). So we give the steps instead of punting
+# with the call-manager marker. Button labels mirror the main bot exactly.
+INDIVIDUAL_RECONNECT_GUIDANCE = (
+    "ВАЖНО (у клиента ИНДИВИДУАЛЬНАЯ или Duo подписка): если клиент пишет, что его "
+    "подписка отключилась / слетела / перестала работать И что он уже оплатил "
+    "(или его подписка активна и оплачена) — это НЕ повод передавать вопрос "
+    f"менеджеру, маркер {CALL_MANAGER_MARKER} в этом случае НЕ ставь. Переподключение "
+    "теперь делается в один тап через бота — спокойно подскажи, как отправить "
+    "заявку на переподключение:\n"
+    f"1) Открыть бота @{settings.purchase_bot_username} и нажать кнопку "
+    "«🔌 Переподключить» (она внизу на клавиатуре и под сообщением «📊 Мой статус»).\n"
+    "2) Проверить свой Spotify-логин и нажать «✅ Отправить заявку» (или «✏️ Изменить "
+    "логин и пароль», если данные поменялись).\n"
+    "3) Менеджер переподключит в ближайшее время.\n"
+    "Кнопка работает, только если подписка активна и оплачена. Если у клиента "
+    "оплата просрочена — сначала помоги оплатить, переподключение станет доступно "
+    "после оплаты. Сам оплату не подтверждай и не обещай мгновенное подключение."
+)
+
 
 def _when_phrase(d: int | None, npd) -> str:
     if d is None:
@@ -272,6 +294,8 @@ def build_context_block(status: dict | None) -> str:
                                            SEGMENT_OBJECTIVE["unknown"]))
     if any(e.get("kind") == "group" for e in status.get("entries", [])):
         lines.append(GROUP_DISCONNECT_GUIDANCE)
+    if any(e.get("kind") in ("individual", "duo") for e in status.get("entries", [])):
+        lines.append(INDIVIDUAL_RECONNECT_GUIDANCE)
     return "\n".join(lines)
 
 
