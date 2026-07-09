@@ -10,6 +10,7 @@ from bot.services import llm
 
 _USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{4,31})")
 _ID_RE = re.compile(r"\b\d{5,15}\b")
+_GROUP_RE = re.compile(r"(?:групп[аеуы]?|group|spotify)\s*#?([0-9]{1,10})", re.I)
 _WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9_]+")
 _DAYS_RE = re.compile(r"\b(\d{1,3})\s*(?:дн|день|дня|дней|day|days)\b", re.I)
 
@@ -23,7 +24,8 @@ _STOPWORDS = {
     "клиент", "клиента", "клиенты", "клиентов", "когда", "кому", "кто",
     "мне", "надо", "найди", "оплата", "оплате", "оплатил", "оплатить",
     "платеж", "платёж", "по", "покажи", "подписка", "подписке", "про",
-    "просрочка", "просрочен", "сколько", "статус", "что",
+    "просрочка", "просрочен", "сколько", "статус", "что", "группа",
+    "группе", "группы", "группу",
 }
 
 _OVERDUE_WORDS = (
@@ -40,6 +42,10 @@ _STATS_WORDS = (
     "summary", "stats", "statistics", "count", "counts", "сколько",
     "статист", "сводк", "итог",
 )
+_AVAILABLE_GROUP_WORDS = (
+    "available", "free slot", "free slots", "not full", "notfull", "open slot",
+    "open slots", "свобод", "мест", "пуст", "незаполн",
+)
 
 _ADMIN_SYSTEM = """You are an internal assistant for the Spotify service manager.
 Answer the manager/admin, not the customer.
@@ -54,11 +60,24 @@ async def answer(question: str) -> str:
     if not text:
         return "Напишите вопрос про клиента: Telegram ID, @username или имя."
 
+    group_id = _extract_group_display_id(text)
+    if group_id:
+        group = await payments.get_group_info(group_id)
+        if not group:
+            return f"Группа {group_id} не найдена."
+        return _format_group_info(group)
+
     found, missing = await _statuses_from_refs(text)
     if found:
         return await _answer_about_statuses(text, found, missing)
     if missing:
         return "Не найдено в базе: " + ", ".join(missing)
+
+    low = text.lower()
+    if _has_any(low, _AVAILABLE_GROUP_WORDS):
+        region = _extract_region(low)
+        rows = await payments.get_groups_with_available_slots(region=region, limit=30)
+        return _format_available_groups(rows, region)
 
     candidates = await _search_candidates(text)
     if len(candidates) == 1:
@@ -67,7 +86,6 @@ async def answer(question: str) -> str:
     if len(candidates) > 1:
         return _format_candidates(candidates)
 
-    low = text.lower()
     if _has_any(low, _STATS_WORDS):
         return _format_stats(await payments.get_client_stats())
     if _has_any(low, _PENDING_WORDS):
@@ -84,7 +102,8 @@ async def answer(question: str) -> str:
     return (
         "Не понял, какого клиента проверить.\n"
         "Напишите Telegram ID, @username или имя. Например: @username, "
-        "123456789, или \"кто просрочил оплату\"."
+        "123456789, \"подскажите по группе 001\", \"кто просрочил оплату\" "
+        "или \"свободные места в группах\"."
     )
 
 
@@ -164,6 +183,13 @@ def _search_terms(text: str) -> list[str]:
             continue
         terms.append(term)
     return sorted(dict.fromkeys(terms), key=len, reverse=True)
+
+
+def _extract_group_display_id(text: str) -> str | None:
+    match = _GROUP_RE.search(text)
+    if not match:
+        return None
+    return match.group(1)
 
 
 async def _answer_about_statuses(
@@ -261,6 +287,62 @@ def _format_candidates(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_group_info(group: dict) -> str:
+    next_payment = _fmt_date(group.get("next_payment_date"))
+    lines = [
+        f"Группа {group['display_id']} - {group['group_name']}",
+        f"Регион: {group['region']}, цена: {group['amount']}{group['currency']}/мес",
+        f"Базовая дата оплаты группы: {next_payment}",
+        (
+            f"Места: занято {group['occupied_slots']}/6, "
+            f"свободно {group['free_slots']}, phantom-слотов {group['phantom_slots']}"
+        ),
+    ]
+    members = group.get("members") or []
+    if not members:
+        lines.append("Реальных участников нет.")
+        return "\n".join(lines)
+
+    lines.append("Участники:")
+    for idx, member in enumerate(members, start=1):
+        lines.append(f"{idx}. {_member_line(member)}")
+    return "\n".join(lines)
+
+
+def _member_line(member: dict) -> str:
+    name = member.get("first_name") or "без имени"
+    username = f"@{member['username']}" if member.get("username") else f"id {member['user_id']}"
+    display_id = (
+        f", display_id {member['user_display_id']}"
+        if member.get("user_display_id") is not None else ""
+    )
+    last_payment = _fmt_date(member.get("last_payment_date"))
+    payments_count = member.get("total_payments") or 0
+    return (
+        f"{name} ({username}{display_id}) - {member['slots']} слот(а), "
+        f"{_days_text(member.get('days_until_due'))}, "
+        f"дата {_fmt_date(member.get('next_payment_date'))}, "
+        f"платежей {payments_count}, последний платёж {last_payment}"
+    )
+
+
+def _format_available_groups(rows: list[dict], region: str | None) -> str:
+    if not rows:
+        suffix = f" {region}" if region else ""
+        return f"Свободных групп{suffix} не нашёл."
+    title = "Свободные места в группах"
+    if region:
+        title += f" {region}"
+    lines = [f"{title}: {len(rows)}"]
+    for idx, group in enumerate(rows[:30], start=1):
+        lines.append(
+            f"{idx}. {group['display_id']} - {group['group_name']}, "
+            f"{group['region']}, занято {group['occupied_slots']}/6, "
+            f"свободно {group['free_slots']}, дата {_fmt_date(group.get('next_payment_date'))}"
+        )
+    return "\n".join(lines)
+
+
 def _format_entries(title: str, rows: list[dict], *, empty: str) -> str:
     if not rows:
         return empty
@@ -322,6 +404,14 @@ def _extract_days(text: str) -> int:
     if match:
         return max(0, min(int(match.group(1)), 365))
     return 7
+
+
+def _extract_region(text: str) -> str | None:
+    if "казахстан" in text or "kz" in text or "кз" in text:
+        return "KZ"
+    if "росси" in text or "ru" in text or "рф" in text:
+        return "RU"
+    return None
 
 
 def _days_text(days: int | None) -> str:

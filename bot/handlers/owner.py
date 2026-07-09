@@ -11,9 +11,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from config import settings
-from bot.db import local
+from bot.db import local, payments
 from bot.services import admin_assistant
-from bot.services.dispatch import deliver
+from bot.services.dispatch import deliver, send_manual_card, send_or_approve
+from bot.utils import prompts
 from bot.utils.prompts import DEFAULT_STYLE
 from bot.utils.states import OwnerStates
 
@@ -227,7 +228,24 @@ async def on_draft_action(call: CallbackQuery, bot: Bot, state: FSMContext) -> N
             await call.message.edit_text(call.message.html_text + "\n\n✅ Отправлено")
             await call.answer("Отправлено")
         else:
-            await call.answer(f"Не удалось: {err}", show_alert=True)
+            status = await payments.get_customer_status(draft["chat_id"])
+            username = status.get("username") if status else None
+            await send_manual_card(
+                bot,
+                call.from_user.id,
+                draft["conn_id"],
+                draft["chat_id"],
+                draft["kind"],
+                draft["text"],
+                err,
+                username=username,
+            )
+            await local.delete_draft(draft_id)
+            await call.message.edit_text(
+                call.message.html_text + "\n\n⚠️ Не удалось отправить автоматически. "
+                "Создал карточку для ручной отправки."
+            )
+            await call.answer("Нужно отправить вручную")
 
 
 @router.message(OwnerStates.editing_draft, F.text)
@@ -264,6 +282,9 @@ async def on_owner_text_question(message: Message, bot: Bot) -> None:
             "имя, просрочки, заявки."
         )
         return
+    if _wants_reminder_drafts(text):
+        await _create_reminder_drafts(message, bot)
+        return
     await _answer_admin_question(message, bot, text)
 
 
@@ -274,3 +295,80 @@ async def _answer_admin_question(message: Message, bot: Bot, question: str) -> N
         pass
     reply = await admin_assistant.answer(question)
     await message.answer(reply, parse_mode=None)
+
+
+def _wants_reminder_drafts(text: str) -> bool:
+    low = text.lower()
+    return (
+        any(word in low for word in ("напомин", "напомн", "remind", "reminder"))
+        and any(word in low for word in ("кажд", "всем", "должн", "просроч"))
+        and any(word in low for word in ("отправ", "чернов", "кноп", "send"))
+    )
+
+
+async def _create_reminder_drafts(message: Message, bot: Bot) -> None:
+    owner_id = message.from_user.id
+    conn = await local.get_owner_connection(owner_id)
+    if not conn:
+        await message.answer(
+            "Нет активного Business-подключения. Сначала подключите бота к "
+            "аккаунту менеджера и включите право отвечать на сообщения."
+        )
+        return
+
+    overdue = await payments.get_overdue_customers(settings.proactive_overdue_days)
+    if not overdue:
+        await message.answer("Просроченных клиентов сейчас нет.")
+        return
+
+    await message.answer("Готовлю черновики напоминаний с кнопками отправки.")
+    seen: set[int] = set()
+    drafted = 0
+    stage1 = 0
+    stage2 = 0
+
+    for row in overdue:
+        customer_id = row["user_id"]
+        if customer_id in seen:
+            continue
+        seen.add(customer_id)
+
+        status = await payments.get_customer_status(customer_id)
+        if not status:
+            continue
+        overdue_entries = [e for e in status["entries"] if e["is_overdue"]]
+        if not overdue_entries:
+            continue
+        primary = overdue_entries[0]
+        stage = await _reminder_draft_stage(customer_id, primary)
+        text = prompts.nudge_text(stage, primary)
+        await send_or_approve(
+            bot,
+            owner_id,
+            conn["id"],
+            customer_id,
+            "outreach",
+            text,
+            auto=False,
+            username=status.get("username"),
+        )
+        drafted += 1
+        if stage == 1:
+            stage1 += 1
+        else:
+            stage2 += 1
+
+    await message.answer(
+        f"Готово: создано черновиков {drafted}.\n"
+        f"Первое напоминание: {stage1}, повторное: {stage2}.\n"
+        "В каждом черновике есть кнопки «Отправить», «Изменить», «Пропустить»."
+    )
+
+
+async def _reminder_draft_stage(customer_id: int, entry: dict) -> int:
+    next_payment = entry.get("next_payment_date")
+    cycle_due = next_payment.isoformat() if next_payment else "?"
+    state = await local.get_outreach_state(customer_id)
+    if state and state["cycle_due"] == cycle_due and state["stage"] >= 1:
+        return 2
+    return 1

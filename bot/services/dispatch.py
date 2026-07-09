@@ -231,3 +231,31 @@ async def send_or_approve(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
     except Exception:  # noqa: BLE001
         logger.exception("could not notify owner %s about draft", owner_id)
     return False
+
+
+async def send_manual_card(bot: Bot, owner_id: int, conn_id: str, chat_id: int,
+                           kind: str, text: str, err: str | None,
+                           username: str | None = None) -> None:
+    """Create a manual-send card after an existing draft failed to deliver."""
+    reason = _manual_reason(err)
+    draft_id = await local.create_draft(owner_id, conn_id, chat_id, kind, text)
+    kb = manual_send_kb(draft_id, _chat_url(username, _plain(text)))
+    try:
+        try:
+            await bot.send_message(
+                owner_id,
+                _preview(kind, chat_id, text, reason, escape_text=False,
+                         username=username, manual=True),
+                reply_markup=kb,
+            )
+        except TelegramBadRequest as e:
+            if not _is_parse_error(e):
+                raise
+            await bot.send_message(
+                owner_id,
+                _preview(kind, chat_id, text, reason, escape_text=True,
+                         username=username, manual=True),
+                reply_markup=kb,
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("could not notify owner %s about manual-send draft", owner_id)

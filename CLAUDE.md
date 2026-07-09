@@ -7,7 +7,8 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 A **separate** Telegram bot from the main payment bot (`../spotify_family_automatization-fresh-start`). It runs on the **manager's personal Telegram account** via **Telegram Business / Chat Automation** and:
 
 - **Answers customers as the manager**, in the manager's style, grounded in the real payment database.
-- **Answers owner/admin questions about clients** in the bot DM, using read-only PostgreSQL lookups.
+- **Answers owner/admin questions about clients and groups** in the bot DM, using read-only PostgreSQL lookups.
+- **Creates per-client reminder drafts on request** with Send/Edit/Skip buttons, without advancing the scheduled outreach stage.
 - **Texts overdue customers first** (proactive nudges) — because customers ignore the bot and only pay after the manager messages them.
 - Talks to any **OpenAI-compatible LLM API** (OpenAI / OpenRouter / local Ollama) via an ordered fallback chain that rotates to the next model on a 429 — provider chosen purely by `.env`.
 
@@ -22,7 +23,7 @@ It only **reads** the main payment bot's PostgreSQL DB for grounding — it neve
 | Language | Python 3.11+ (Dockerfile pins 3.11-slim) |
 | Bot framework | Aiogram 3.x (FSM via MemoryStorage) |
 | Telegram feature | Business connection (`business_connection` / `business_message` updates; replies via `business_connection_id`) |
-| LLM | Any OpenAI-compatible API (OpenAI / OpenRouter / Ollama) set by `LLM_BASE_URL`; ordered chain in `LLM_MODELS`, rotates on 429 |
+| LLM | Any OpenAI-compatible API (OpenAI / OpenRouter / Ollama) set by `LLM_BASE_URL`; ordered chain in `LLM_MODELS`, defaults to cheap `gpt-4o-mini`, rotates on 429 |
 | Own state | SQLite via **aiosqlite** (`data/manager.db`) |
 | Grounding source | **asyncpg**, read-only into the payment bot's Postgres |
 | Scheduling | APScheduler 3.x (`AsyncIOScheduler`) |
@@ -129,7 +130,9 @@ Per-owner overrides (style prompt, auto-reply) live in the SQLite `owner_setting
 | `/nudge` | Run overdue-customer outreach immediately — unlimited: ignores the once-per-day guard and stage cap, re-nudging every overdue customer (forces even if `PROACTIVE_MODE=off`) |
 | `/emojiid` | FSM: the owner sends the Premium emoji they want; the bot replies with each `custom_emoji_id` and a ready-to-paste `CUSTOM_EMOJI_IDS` line for `.env` |
 
-Plain private owner messages are also treated as DB-backed client questions, for example `кто просрочил оплату?`, `что по @username?`, or `оплаты сегодня`.
+Plain private owner messages are also treated as DB-backed client questions, for example `кто просрочил оплату?`, `что по @username?`, `подскажите по группе 001`, `свободные места в группах`, or `оплаты сегодня`.
+
+The owner can also ask `напиши для каждого напоминалку чтобы я мог сразу отправить`. This creates one draft per overdue customer with the existing Send/Edit/Skip keyboard. This path must not call `run_outreach(force=True)`, must not auto-send, and must not write `outreach_state` or `outreach_log`.
 
 Draft approval is via inline buttons (`d:send:<id>` / `d:edit:<id>` / `d:skip:<id>`) handled in `owner.py`.
 
@@ -146,7 +149,7 @@ Draft approval is via inline buttons (`d:send:<id>` / `d:edit:<id>` / `d:skip:<i
 - **The model must not invent payment facts.** Any new info the customer can ask about must be added to the context block in `prompts.build_context_block`, not left to the model.
 - **New FSM states** → `bot/utils/states.py`; **new keyboards** → `bot/utils/keyboards.py`; **new env vars** → `config.py` + `.env.example`.
 - **Owner-only handlers** are gated by `router.message.filter(F.from_user.id.in_(settings.owner_ids))` in `owner.py`; callback handlers re-check `settings.owner_ids` manually.
-- **Owner assistant queries** must stay read-only and route through explicit helpers in `bot/db/payments.py`. Do not let the LLM produce SQL.
+- **Owner assistant queries** must stay read-only and route through explicit helpers in `bot/db/payments.py`. Do not let the LLM produce SQL. Group lookup uses `groups.display_id`, excludes `user_groups.is_phantom = TRUE` from real member counts, and computes payment state with the same latest-payment `COALESCE` shape used for customer status.
 - **Aiogram version drift:** `BusinessConnection` moved `can_reply` → `rights.can_reply` (≥3.15). `business.py` reads both defensively — preserve that.
 - **Git commits: no co-authorship.** Do NOT add `Co-Authored-By` or "Generated with Claude Code" trailers (same rule as the main repo).
 

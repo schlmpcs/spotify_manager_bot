@@ -6,12 +6,12 @@ Telegram Business / Chat Automation). It:
 - **Answers customers from your account**, in your style, grounded in the real
   payment database (never invents prices or due dates).
 - **Answers your own client questions in the bot DM** by looking up the same
-  PostgreSQL payment data.
+  PostgreSQL payment data, including clients, groups, open slots, and drafts.
 - **Texts overdue customers first** — because people ignore the bot and only pay
   after the manager messages them.
-- Runs on **any OpenAI-compatible LLM** — OpenAI (`gpt-4o-mini`), OpenRouter's free
-  models, or a local Ollama model — chosen by `.env`, with a fallback chain that
-  rotates to the next model on a rate-limit (429).
+- Runs on **any OpenAI-compatible LLM**: OpenAI (`gpt-4o-mini` by default),
+  OpenRouter's free models, or a local Ollama model, chosen by `.env`, with a
+  fallback chain that rotates to the next model on a rate-limit (429).
 
 It is a *separate* bot from the main payment bot. It only **reads** the payment
 bot's PostgreSQL database for grounding.
@@ -58,7 +58,7 @@ directly; the rest you'll see as drafts.
 
 ### 2. Pick an LLM provider
 Set `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODELS` in `.env` (examples inline there):
-- **OpenAI** — reliable, cheap with `gpt-4o-mini`; key from [platform.openai.com](https://platform.openai.com).
+- **OpenAI**: cheap and reliable with `gpt-4o-mini`; key from [platform.openai.com](https://platform.openai.com).
 - **OpenRouter** — free models (rate-limited); key from [openrouter.ai/keys](https://openrouter.ai/keys).
 - **Ollama** — free & private, runs on your own GPU (see [Local model](#local-model-ollama)).
 
@@ -97,7 +97,9 @@ messages"**. The bot will DM you a confirmation.
 | `/nudge` | Run the overdue-customer outreach right now |
 
 You can also DM the bot a normal manager question, for example
-`кто просрочил оплату?`, `что по @username?`, or `оплаты сегодня`.
+`кто просрочил оплату?`, `что по @username?`, `подскажите по группе 001`,
+`свободные места в группах`, or
+`напиши для каждого напоминалку чтобы я мог сразу отправить`.
 
 ## Key settings (`.env`)
 
@@ -136,8 +138,8 @@ LLM_MODELS=["qwen2.5:7b-instruct"]
 > **Where it runs matters.** A typical VPS has no GPU. To use the 5060 you must
 > either run the whole bot **on the GPU machine**, or keep the bot on the VPS and
 > expose Ollama to it over a private link (e.g. Tailscale / WireGuard) — never
-> expose `11434` to the public internet. For a GPU-less VPS, `gpt-4o-mini` is the
-> simplest reliable choice.
+> expose `11434` to the public internet. For a GPU-less VPS, `gpt-4o-mini` is
+> the cheapest reliable OpenAI default for this bot.
 
 ---
 

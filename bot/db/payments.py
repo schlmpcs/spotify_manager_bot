@@ -273,6 +273,75 @@ _IND_DUE_TAIL = """ AND COALESCE(
       ORDER BY next_payment_date ASC
       LIMIT $2"""
 
+_GROUP_HEADER_SELECT = """
+    SELECT
+        g.group_id,
+        g.group_name,
+        g.display_id,
+        g.payment_day_of_month,
+        g.next_payment_date,
+        COALESCE(SUM(ug.slots) FILTER (WHERE ug.is_phantom = FALSE), 0)::int
+            AS occupied_slots,
+        COALESCE(SUM(ug.slots) FILTER (WHERE ug.is_phantom = TRUE), 0)::int
+            AS phantom_slots,
+        COUNT(*) FILTER (WHERE ug.is_phantom = FALSE) AS real_member_count,
+        COUNT(*) FILTER (WHERE ug.is_phantom = TRUE) AS phantom_member_count
+    FROM groups g
+    LEFT JOIN user_groups ug ON ug.group_id = g.group_id
+    WHERE g.display_id = $1
+    GROUP BY
+        g.group_id,
+        g.group_name,
+        g.display_id,
+        g.payment_day_of_month,
+        g.next_payment_date
+"""
+
+_GROUP_MEMBERS_SELECT = """
+    SELECT
+        u.user_id,
+        u.username,
+        u.first_name,
+        u.display_id AS user_display_id,
+        ug.slots,
+        ug.is_phantom,
+        COALESCE(
+            (SELECT next_payment_date FROM payments
+             WHERE user_id = ug.user_id AND group_id = ug.group_id
+             ORDER BY payment_id DESC LIMIT 1),
+            g.next_payment_date
+        ) AS next_payment_date,
+        (SELECT payment_date FROM payments
+         WHERE user_id = ug.user_id AND group_id = ug.group_id
+         ORDER BY payment_id DESC LIMIT 1) AS last_payment_date,
+        (SELECT COUNT(*) FROM payments
+         WHERE user_id = ug.user_id AND group_id = ug.group_id) AS total_payments
+    FROM groups g
+    JOIN user_groups ug ON ug.group_id = g.group_id
+    JOIN users u ON u.user_id = ug.user_id
+    WHERE g.group_id = $1
+    ORDER BY ug.is_phantom, u.display_id, u.user_id
+"""
+
+_AVAILABLE_GROUPS_SELECT = """
+    SELECT
+        g.group_id,
+        g.group_name,
+        g.display_id,
+        g.next_payment_date,
+        COALESCE(SUM(ug.slots) FILTER (WHERE ug.is_phantom = FALSE), 0)::int
+            AS occupied_slots,
+        COALESCE(SUM(ug.slots) FILTER (WHERE ug.is_phantom = TRUE), 0)::int
+            AS phantom_slots
+    FROM groups g
+    LEFT JOIN user_groups ug ON ug.group_id = g.group_id
+    WHERE ($1::text IS NULL OR g.display_id LIKE $1)
+    GROUP BY g.group_id, g.group_name, g.display_id, g.next_payment_date
+    HAVING COALESCE(SUM(ug.slots) FILTER (WHERE ug.is_phantom = FALSE), 0) < 6
+    ORDER BY g.display_id
+    LIMIT $2
+"""
+
 
 async def get_user_identity(user_id: int) -> Optional[dict]:
     """Return a user's basic identity from the payment DB, if present."""
@@ -394,6 +463,59 @@ async def get_customer_status_by_username(username: str) -> Optional[dict]:
     return await get_customer_status(ident["user_id"])
 
 
+def _group_member(row, today: date) -> dict:
+    npd = _as_date(row["next_payment_date"])
+    days = (npd - today).days if npd else None
+    return {
+        "user_id": row["user_id"],
+        "username": row["username"],
+        "first_name": row["first_name"],
+        "user_display_id": row["user_display_id"],
+        "slots": row["slots"] or 1,
+        "is_phantom": bool(row["is_phantom"]),
+        "next_payment_date": npd,
+        "days_until_due": days,
+        "is_overdue": days is not None and days < 0,
+        "last_payment_date": _as_date(row["last_payment_date"]),
+        "total_payments": row["total_payments"] or 0,
+    }
+
+
+async def get_group_info(display_id: str) -> Optional[dict]:
+    """Detailed read-only status for one family group by display_id."""
+    if not _pool:
+        return None
+    clean_id = str(display_id).strip()
+    if not clean_id:
+        return None
+    async with _pool.acquire() as conn:
+        group = await conn.fetchrow(_GROUP_HEADER_SELECT, clean_id)
+        if not group:
+            return None
+        rows = await conn.fetch(_GROUP_MEMBERS_SELECT, group["group_id"])
+
+    today = date.today()
+    region = _region(group["display_id"])
+    members = [_group_member(r, today) for r in rows]
+    real_members = [m for m in members if not m["is_phantom"]]
+    return {
+        "group_id": group["group_id"],
+        "group_name": group["group_name"],
+        "display_id": group["display_id"],
+        "payment_day_of_month": group["payment_day_of_month"],
+        "next_payment_date": _as_date(group["next_payment_date"]),
+        "region": region,
+        "currency": _currency(region),
+        "amount": _price(region),
+        "occupied_slots": group["occupied_slots"] or 0,
+        "phantom_slots": group["phantom_slots"] or 0,
+        "real_member_count": group["real_member_count"] or len(real_members),
+        "phantom_member_count": group["phantom_member_count"] or 0,
+        "free_slots": max(0, 6 - (group["occupied_slots"] or 0)),
+        "members": real_members,
+    }
+
+
 async def get_overdue_customers(min_days_overdue: int = 1) -> list[dict]:
     """One entry per overdue subscription (group slot or individual plan),
     most overdue first. Outreach dedupes by user_id afterwards."""
@@ -446,6 +568,37 @@ async def get_pending_requests(limit: int = 20) -> list[dict]:
         pending["first_name"] = r["first_name"]
         pending["username"] = r["username"]
         out.append(pending)
+    return out
+
+
+async def get_groups_with_available_slots(
+    region: str | None = None, limit: int = 30
+) -> list[dict]:
+    """Family groups with fewer than 6 occupied real slots."""
+    if not _pool:
+        return []
+    limit = max(1, min(limit, 100))
+    pattern = None
+    if region:
+        pattern = "1%" if region.upper() == "RU" else "0%"
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(_AVAILABLE_GROUPS_SELECT, pattern, limit)
+    out: list[dict] = []
+    for r in rows:
+        group_region = _region(r["display_id"])
+        occupied = r["occupied_slots"] or 0
+        out.append({
+            "group_id": r["group_id"],
+            "group_name": r["group_name"],
+            "display_id": r["display_id"],
+            "next_payment_date": _as_date(r["next_payment_date"]),
+            "region": group_region,
+            "currency": _currency(group_region),
+            "amount": _price(group_region),
+            "occupied_slots": occupied,
+            "phantom_slots": r["phantom_slots"] or 0,
+            "free_slots": max(0, 6 - occupied),
+        })
     return out
 
 

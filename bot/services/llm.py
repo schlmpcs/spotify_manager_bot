@@ -49,8 +49,11 @@ async def chat(messages: list[dict], *, temperature: float = 0.6) -> Optional[st
                     "messages": messages,
                     "stream": False,
                     "temperature": temperature,
-                    "max_tokens": settings.llm_max_tokens,
                 }
+                if model.startswith(("gpt-5", "o1", "o3", "o4")):
+                    payload["max_completion_tokens"] = settings.llm_max_tokens
+                else:
+                    payload["max_tokens"] = settings.llm_max_tokens
                 try:
                     async with session.post(url, json=payload) as resp:
                         if resp.status == 200:
