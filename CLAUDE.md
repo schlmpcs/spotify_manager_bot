@@ -7,6 +7,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 A **separate** Telegram bot from the main payment bot (`../spotify_family_automatization-fresh-start`). It runs on the **manager's personal Telegram account** via **Telegram Business / Chat Automation** and:
 
 - **Answers customers as the manager**, in the manager's style, grounded in the real payment database.
+- **Answers owner/admin questions about clients** in the bot DM, using read-only PostgreSQL lookups.
 - **Texts overdue customers first** (proactive nudges) — because customers ignore the bot and only pay after the manager messages them.
 - Talks to any **OpenAI-compatible LLM API** (OpenAI / OpenRouter / local Ollama) via an ordered fallback chain that rotates to the next model on a 429 — provider chosen purely by `.env`.
 
@@ -38,9 +39,10 @@ It only **reads** the main payment bot's PostgreSQL DB for grounding — it neve
 ├── bot/
 │   ├── handlers/
 │   │   ├── business.py      # @router.business_connection + @router.business_message
-│   │   └── owner.py         # Owner commands (/start /status /style /auto /nudge) + draft-approval callbacks
+│   │   └── owner.py         # Owner commands (/start /status /style /auto /client /nudge) + draft approvals
 │   ├── services/
 │   │   ├── llm.py           # Async OpenAI-compatible client — chat(messages) -> str | None (model fallback chain)
+│   │   ├── admin_assistant.py # Owner DM assistant for client DB questions
 │   │   ├── dispatch.py      # deliver() (send AS manager) + send_or_approve() (auto vs draft)
 │   │   └── outreach.py      # run_outreach(bot) — daily overdue-customer nudges
 │   ├── db/
@@ -123,8 +125,11 @@ Per-owner overrides (style prompt, auto-reply) live in the SQLite `owner_setting
 | `/status` | Connection state, auto-reply mode, proactive mode, style |
 | `/style` | FSM: capture the manager's writing style (stored per-owner) |
 | `/auto on\|off` | Toggle auto-send vs draft approval |
+| `/client <id\|@username\|name>` | Look up client/payment status from the PostgreSQL payment DB |
 | `/nudge` | Run overdue-customer outreach immediately — unlimited: ignores the once-per-day guard and stage cap, re-nudging every overdue customer (forces even if `PROACTIVE_MODE=off`) |
 | `/emojiid` | FSM: the owner sends the Premium emoji they want; the bot replies with each `custom_emoji_id` and a ready-to-paste `CUSTOM_EMOJI_IDS` line for `.env` |
+
+Plain private owner messages are also treated as DB-backed client questions, for example `кто просрочил оплату?`, `что по @username?`, or `оплаты сегодня`.
 
 Draft approval is via inline buttons (`d:send:<id>` / `d:edit:<id>` / `d:skip:<id>`) handled in `owner.py`.
 
@@ -141,6 +146,7 @@ Draft approval is via inline buttons (`d:send:<id>` / `d:edit:<id>` / `d:skip:<i
 - **The model must not invent payment facts.** Any new info the customer can ask about must be added to the context block in `prompts.build_context_block`, not left to the model.
 - **New FSM states** → `bot/utils/states.py`; **new keyboards** → `bot/utils/keyboards.py`; **new env vars** → `config.py` + `.env.example`.
 - **Owner-only handlers** are gated by `router.message.filter(F.from_user.id.in_(settings.owner_ids))` in `owner.py`; callback handlers re-check `settings.owner_ids` manually.
+- **Owner assistant queries** must stay read-only and route through explicit helpers in `bot/db/payments.py`. Do not let the LLM produce SQL.
 - **Aiogram version drift:** `BusinessConnection` moved `can_reply` → `rights.can_reply` (≥3.15). `business.py` reads both defensively — preserve that.
 - **Git commits: no co-authorship.** Do NOT add `Co-Authored-By` or "Generated with Claude Code" trailers (same rule as the main repo).
 

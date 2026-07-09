@@ -5,6 +5,8 @@ Telegram Business / Chat Automation). It:
 
 - **Answers customers from your account**, in your style, grounded in the real
   payment database (never invents prices or due dates).
+- **Answers your own client questions in the bot DM** by looking up the same
+  PostgreSQL payment data.
 - **Texts overdue customers first** — because people ignore the bot and only pay
   after the manager messages them.
 - Runs on **any OpenAI-compatible LLM** — OpenAI (`gpt-4o-mini`), OpenRouter's free
@@ -91,7 +93,11 @@ messages"**. The bot will DM you a confirmation.
 | `/status` | Connection state, auto-reply mode, style |
 | `/style` | Describe how you talk to customers (the bot mimics it) |
 | `/auto on\|off` | Auto-send replies, or queue drafts for approval |
+| `/client <id\|@username\|name>` | Look up a client from the payment DB |
 | `/nudge` | Run the overdue-customer outreach right now |
+
+You can also DM the bot a normal manager question, for example
+`кто просрочил оплату?`, `что по @username?`, or `оплаты сегодня`.
 
 ## Key settings (`.env`)
 

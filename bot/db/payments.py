@@ -94,6 +94,15 @@ def _pending_entry(row) -> dict:
     }
 
 
+def _identity(row) -> dict:
+    """Minimal user identity returned by admin/client searches."""
+    return {
+        "user_id": row["user_id"],
+        "first_name": row["first_name"],
+        "username": row["username"],
+    }
+
+
 def _individual_entry(row, today: date) -> dict:
     """An individual / duo subscription rendered as a unified status entry.
 
@@ -209,6 +218,22 @@ _PENDING_SELECT = """
     ORDER BY pr.created_at DESC
 """
 
+_PENDING_LIST_SELECT = """
+    SELECT
+        pr.request_id,
+        pr.user_id,
+        pr.region,
+        pr.client_type,
+        pr.created_at,
+        u.username,
+        u.first_name
+    FROM purchase_requests pr
+    LEFT JOIN users u ON u.user_id = pr.user_id
+    WHERE pr.status = 'pending'
+    ORDER BY pr.created_at DESC
+    LIMIT $1
+"""
+
 
 _GRP_OVERDUE_TAIL = """ AND COALESCE(
         (SELECT next_payment_date FROM payments
@@ -217,6 +242,109 @@ _GRP_OVERDUE_TAIL = """ AND COALESCE(
         g.next_payment_date
       ) < CURRENT_DATE
       ORDER BY next_payment_date ASC"""
+
+_GRP_DUE_TAIL = """ AND COALESCE(
+        (SELECT next_payment_date FROM payments
+         WHERE user_id = ug.user_id AND group_id = g.group_id
+         ORDER BY payment_id DESC LIMIT 1),
+        g.next_payment_date
+      ) >= CURRENT_DATE
+      AND COALESCE(
+        (SELECT next_payment_date FROM payments
+         WHERE user_id = ug.user_id AND group_id = g.group_id
+         ORDER BY payment_id DESC LIMIT 1),
+        g.next_payment_date
+      ) <= CURRENT_DATE + ($1::int)
+      ORDER BY next_payment_date ASC
+      LIMIT $2"""
+
+_IND_DUE_TAIL = """ AND COALESCE(
+        (SELECT next_payment_date FROM individual_payments
+         WHERE individual_client_id = ic.id
+         ORDER BY payment_id DESC LIMIT 1),
+        ic.next_payment_date
+      ) >= CURRENT_DATE
+      AND COALESCE(
+        (SELECT next_payment_date FROM individual_payments
+         WHERE individual_client_id = ic.id
+         ORDER BY payment_id DESC LIMIT 1),
+        ic.next_payment_date
+      ) <= CURRENT_DATE + ($1::int)
+      ORDER BY next_payment_date ASC
+      LIMIT $2"""
+
+
+async def get_user_identity(user_id: int) -> Optional[dict]:
+    """Return a user's basic identity from the payment DB, if present."""
+    if not _pool:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_id, username, first_name FROM users WHERE user_id = $1",
+            user_id,
+        )
+    return _identity(row) if row else None
+
+
+async def get_user_identity_by_username(username: str) -> Optional[dict]:
+    """Return a user's basic identity by exact Telegram username."""
+    if not _pool:
+        return None
+    clean = username.strip().lstrip("@")
+    if not clean:
+        return None
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT user_id, username, first_name
+               FROM users
+               WHERE lower(coalesce(username, '')) = lower($1)
+               ORDER BY user_id
+               LIMIT 1""",
+            clean,
+        )
+    return _identity(row) if row else None
+
+
+async def find_customers(query: str, limit: int = 8) -> list[dict]:
+    """Search users by id, username, or first name for owner-side lookup."""
+    if not _pool:
+        return []
+    term = (query or "").strip().lstrip("@")
+    if not term:
+        return []
+    limit = max(1, min(limit, 25))
+    async with _pool.acquire() as conn:
+        if term.isdigit():
+            user_id = int(term)
+            rows = await conn.fetch(
+                """SELECT user_id, username, first_name,
+                          CASE WHEN user_id = $1 THEN 0 ELSE 1 END AS rank
+                   FROM users
+                   WHERE user_id = $1
+                      OR lower(coalesce(username, '')) = lower($2)
+                   ORDER BY rank, user_id
+                   LIMIT $3""",
+                user_id, term, limit,
+            )
+        else:
+            pattern = f"%{term.lower()}%"
+            rows = await conn.fetch(
+                """SELECT user_id, username, first_name,
+                          CASE
+                            WHEN lower(coalesce(username, '')) = lower($1) THEN 0
+                            WHEN lower(coalesce(username, '')) LIKE $2 THEN 1
+                            WHEN lower(coalesce(first_name, '')) LIKE $2 THEN 2
+                            ELSE 3
+                          END AS rank
+                   FROM users
+                   WHERE lower(coalesce(username, '')) = lower($1)
+                      OR lower(coalesce(username, '')) LIKE $2
+                      OR lower(coalesce(first_name, '')) LIKE $2
+                   ORDER BY rank, user_id
+                   LIMIT $3""",
+                term, pattern, limit,
+            )
+    return [_identity(r) for r in rows]
 
 
 async def get_customer_status(user_id: int) -> Optional[dict]:
@@ -258,6 +386,14 @@ async def get_customer_status(user_id: int) -> Optional[dict]:
     }
 
 
+async def get_customer_status_by_username(username: str) -> Optional[dict]:
+    """Full grounding context for one customer, looked up by @username."""
+    ident = await get_user_identity_by_username(username)
+    if not ident:
+        return None
+    return await get_customer_status(ident["user_id"])
+
+
 async def get_overdue_customers(min_days_overdue: int = 1) -> list[dict]:
     """One entry per overdue subscription (group slot or individual plan),
     most overdue first. Outreach dedupes by user_id afterwards."""
@@ -278,3 +414,97 @@ async def get_overdue_customers(min_days_overdue: int = 1) -> list[dict]:
             out.append(e)
     out.sort(key=lambda e: e["days_until_due"])  # most overdue (most negative) first
     return out
+
+
+async def get_due_customers(max_days: int = 7, limit: int = 20) -> list[dict]:
+    """Subscriptions due from today through `max_days` days from now."""
+    if not _pool:
+        return []
+    max_days = max(0, min(max_days, 365))
+    limit = max(1, min(limit, 100))
+    async with _pool.acquire() as conn:
+        grp = await conn.fetch(_BASE_SELECT + _GRP_DUE_TAIL, max_days, limit)
+        ind = await conn.fetch(_IND_SELECT + _IND_DUE_TAIL, max_days, limit)
+    today = date.today()
+    out = [_group_entry(r, today) for r in grp]
+    out += [_individual_entry(r, today) for r in ind]
+    out.sort(key=lambda e: (e["days_until_due"] is None, e["days_until_due"] or 0))
+    return out[:limit]
+
+
+async def get_pending_requests(limit: int = 20) -> list[dict]:
+    """Recent pending purchase requests for the owner assistant."""
+    if not _pool:
+        return []
+    limit = max(1, min(limit, 100))
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(_PENDING_LIST_SELECT, limit)
+    out: list[dict] = []
+    for r in rows:
+        pending = _pending_entry(r)
+        pending["user_id"] = r["user_id"]
+        pending["first_name"] = r["first_name"]
+        pending["username"] = r["username"]
+        out.append(pending)
+    return out
+
+
+async def get_client_stats() -> dict:
+    """High-level read-only counts for owner-side questions."""
+    if not _pool:
+        return {}
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            WITH group_slots AS (
+                SELECT
+                    ug.user_id,
+                    COALESCE(
+                        (SELECT next_payment_date FROM payments
+                         WHERE user_id = ug.user_id AND group_id = g.group_id
+                         ORDER BY payment_id DESC LIMIT 1),
+                        g.next_payment_date
+                    ) AS next_payment_date
+                FROM user_groups ug
+                JOIN groups g ON ug.group_id = g.group_id
+                WHERE ug.is_phantom = FALSE
+            ),
+            individual AS (
+                SELECT
+                    ic.user_id,
+                    ic.plan,
+                    COALESCE(
+                        (SELECT next_payment_date FROM individual_payments
+                         WHERE individual_client_id = ic.id
+                         ORDER BY payment_id DESC LIMIT 1),
+                        ic.next_payment_date
+                    ) AS next_payment_date
+                FROM individual_clients ic
+                WHERE ic.is_active = TRUE
+            ),
+            active_users AS (
+                SELECT user_id FROM group_slots
+                UNION
+                SELECT user_id FROM individual
+            ),
+            overdue_users AS (
+                SELECT user_id FROM group_slots WHERE next_payment_date < CURRENT_DATE
+                UNION
+                SELECT user_id FROM individual WHERE next_payment_date < CURRENT_DATE
+            ),
+            pending AS (
+                SELECT user_id FROM purchase_requests WHERE status = 'pending'
+            )
+            SELECT
+                (SELECT COUNT(*) FROM group_slots) AS group_slots,
+                (SELECT COUNT(DISTINCT user_id) FROM group_slots) AS group_users,
+                (SELECT COUNT(*) FROM individual WHERE plan = 'individual')
+                    AS individual_clients,
+                (SELECT COUNT(*) FROM individual WHERE plan = 'duo') AS duo_clients,
+                (SELECT COUNT(DISTINCT user_id) FROM individual) AS individual_users,
+                (SELECT COUNT(DISTINCT user_id) FROM active_users) AS active_users,
+                (SELECT COUNT(DISTINCT user_id) FROM overdue_users) AS overdue_users,
+                (SELECT COUNT(*) FROM pending) AS pending_requests
+            """
+        )
+    return dict(row) if row else {}

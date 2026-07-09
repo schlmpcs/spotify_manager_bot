@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 
 from config import settings
 from bot.db import local
+from bot.services import admin_assistant
 from bot.services.dispatch import deliver
 from bot.utils.prompts import DEFAULT_STYLE
 from bot.utils.states import OwnerStates
@@ -32,7 +33,8 @@ async def cmd_start(message: Message) -> None:
         "(или <b>Автоматизация чатов</b>).\n"
         f"2. Добавьте этого бота и выберите чаты.\n"
         "3. Включите право «Отвечать на сообщения».\n\n"
-        "Команды: /status · /style · /auto · /nudge · /emojiid"
+        "Команды: /status · /style · /auto · /client · /nudge · /emojiid\n"
+        "Можно также просто написать мне вопрос про клиента."
     )
 
 
@@ -89,6 +91,20 @@ async def cmd_auto(message: Message) -> None:
         await message.answer("✍️ Авто-ответы выключены — буду присылать черновики.")
     else:
         await message.answer("Использование: <code>/auto on</code> или <code>/auto off</code>")
+
+
+@router.message(Command("client"))
+async def cmd_client(message: Message, bot: Bot) -> None:
+    """Owner asks about a client by id, @username, name, or a short question."""
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) == 1:
+        await message.answer(
+            "Использование: <code>/client 123456789</code> или "
+            "<code>/client @username</code>.\n"
+            "Можно спросить обычным текстом: <code>кто просрочил оплату?</code>"
+        )
+        return
+    await _answer_admin_question(message, bot, parts[1])
 
 
 @router.message(Command("nudge"))
@@ -231,3 +247,30 @@ async def on_edit_draft(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.answer("✅ Отправлено.")
     else:
         await message.answer(f"❌ Не удалось отправить: {err}")
+
+
+@router.message(F.text)
+async def on_owner_text_question(message: Message, bot: Bot) -> None:
+    """Treat ordinary private owner messages as DB-backed client questions."""
+    text = (message.text or "").strip()
+    if message.chat.type != "private":
+        return
+    if not text:
+        return
+    if text.startswith("/"):
+        await message.answer(
+            "Команды: /status · /style · /auto · /client · /nudge · /emojiid\n"
+            "Или напишите обычный вопрос про клиента: @username, Telegram ID, "
+            "имя, просрочки, заявки."
+        )
+        return
+    await _answer_admin_question(message, bot, text)
+
+
+async def _answer_admin_question(message: Message, bot: Bot, question: str) -> None:
+    try:
+        await bot.send_chat_action(message.chat.id, "typing")
+    except Exception:  # noqa: BLE001
+        pass
+    reply = await admin_assistant.answer(question)
+    await message.answer(reply, parse_mode=None)
