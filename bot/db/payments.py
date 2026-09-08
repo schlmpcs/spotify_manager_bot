@@ -168,6 +168,7 @@ _BASE_SELECT = """
     JOIN groups g ON ug.group_id = g.group_id
     JOIN users  u ON ug.user_id = u.user_id
     WHERE ug.is_phantom = FALSE
+      AND g.is_dormant = FALSE
 """
 
 # Individual / duo subscriptions live in their own table (no group). Mirror the
@@ -280,6 +281,7 @@ _GROUP_HEADER_SELECT = """
         g.display_id,
         g.payment_day_of_month,
         g.next_payment_date,
+        g.is_dormant,
         COALESCE(SUM(ug.slots) FILTER (WHERE ug.is_phantom = FALSE), 0)::int
             AS occupied_slots,
         COALESCE(SUM(ug.slots) FILTER (WHERE ug.is_phantom = TRUE), 0)::int
@@ -294,7 +296,8 @@ _GROUP_HEADER_SELECT = """
         g.group_name,
         g.display_id,
         g.payment_day_of_month,
-        g.next_payment_date
+        g.next_payment_date,
+        g.is_dormant
 """
 
 _GROUP_MEMBERS_SELECT = """
@@ -335,7 +338,8 @@ _AVAILABLE_GROUPS_SELECT = """
             AS phantom_slots
     FROM groups g
     LEFT JOIN user_groups ug ON ug.group_id = g.group_id
-    WHERE ($1::text IS NULL OR g.display_id LIKE $1)
+    WHERE g.is_dormant = FALSE
+      AND ($1::text IS NULL OR g.display_id LIKE $1)
     GROUP BY g.group_id, g.group_name, g.display_id, g.next_payment_date
     HAVING COALESCE(SUM(ug.slots) FILTER (WHERE ug.is_phantom = FALSE), 0) < 6
     ORDER BY g.display_id
@@ -504,6 +508,7 @@ async def get_group_info(display_id: str) -> Optional[dict]:
         "display_id": group["display_id"],
         "payment_day_of_month": group["payment_day_of_month"],
         "next_payment_date": _as_date(group["next_payment_date"]),
+        "is_dormant": bool(group["is_dormant"]),
         "region": region,
         "currency": _currency(region),
         "amount": _price(region),
@@ -621,6 +626,7 @@ async def get_client_stats() -> dict:
                 FROM user_groups ug
                 JOIN groups g ON ug.group_id = g.group_id
                 WHERE ug.is_phantom = FALSE
+                  AND g.is_dormant = FALSE
             ),
             individual AS (
                 SELECT

@@ -291,6 +291,7 @@ def _format_group_info(group: dict) -> str:
     next_payment = _fmt_date(group.get("next_payment_date"))
     lines = [
         f"Группа {group['display_id']} - {group['group_name']}",
+        f"Состояние: {'заморожена' if group.get('is_dormant') else 'активна'}",
         f"Регион: {group['region']}, цена: {group['amount']}{group['currency']}/мес",
         f"Базовая дата оплаты группы: {next_payment}",
         (
