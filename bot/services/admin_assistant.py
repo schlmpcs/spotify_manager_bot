@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from datetime import date
 
 from bot.db import payments
 from bot.services import llm
@@ -219,7 +218,7 @@ def _status_context(status: dict) -> str:
         f"name: {status.get('first_name') or 'unknown'}",
         f"username: @{status['username']}" if status.get("username") else "username: missing",
         f"segment: {status.get('segment') or 'unknown'}",
-        f"today: {date.today():%Y-%m-%d}",
+        f"today: {payments.today_():%Y-%m-%d}",
     ]
     entries = status.get("entries") or []
     if entries:

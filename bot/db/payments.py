@@ -8,6 +8,7 @@ operations.py (same COALESCE-of-last-payment logic, same is_phantom guard).
 import logging
 from datetime import date, datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import asyncpg
 
@@ -15,6 +16,13 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 _pool: Optional[asyncpg.Pool] = None
+
+
+def today_() -> date:
+    """Today's date in BOT_TIMEZONE. The container runs on UTC, but the main
+    payment bot counts days in BOT_TIMEZONE (get_now()), so "days until due"
+    must use the same calendar day or the two bots disagree after midnight."""
+    return datetime.now(ZoneInfo(settings.bot_timezone)).date()
 
 
 async def connect() -> None:
@@ -116,6 +124,7 @@ def _individual_entry(row, today: date) -> dict:
     return {
         "kind": plan if plan in ("individual", "duo") else "individual",
         "plan": plan,
+        "client_id": row["client_id"],
         "label": _PLAN_LABEL.get(plan, "индивидуальная подписка"),
         "user_id": row["user_id"],
         "first_name": row["first_name"],
@@ -439,7 +448,7 @@ async def get_customer_status(user_id: int) -> Optional[dict]:
         pending = await conn.fetch(_PENDING_SELECT, user_id)
     if not grp and not ind and not pending:
         return None
-    today = date.today()
+    today = today_()
     entries = [_group_entry(r, today) for r in grp]
     entries += [_individual_entry(r, today) for r in ind]
     # Most urgent first: overdue (most negative days) before far-future / unknown.
@@ -498,7 +507,7 @@ async def get_group_info(display_id: str) -> Optional[dict]:
             return None
         rows = await conn.fetch(_GROUP_MEMBERS_SELECT, group["group_id"])
 
-    today = date.today()
+    today = today_()
     region = _region(group["display_id"])
     members = [_group_member(r, today) for r in rows]
     real_members = [m for m in members if not m["is_phantom"]]
@@ -529,7 +538,7 @@ async def get_overdue_customers(min_days_overdue: int = 1) -> list[dict]:
     async with _pool.acquire() as conn:
         grp = await conn.fetch(_BASE_SELECT + _GRP_OVERDUE_TAIL)
         ind = await conn.fetch(_IND_SELECT + _IND_OVERDUE_TAIL)
-    today = date.today()
+    today = today_()
     out: list[dict] = []
     for r in grp:
         e = _group_entry(r, today)
@@ -552,7 +561,7 @@ async def get_due_customers(max_days: int = 7, limit: int = 20) -> list[dict]:
     async with _pool.acquire() as conn:
         grp = await conn.fetch(_BASE_SELECT + _GRP_DUE_TAIL, max_days, limit)
         ind = await conn.fetch(_IND_SELECT + _IND_DUE_TAIL, max_days, limit)
-    today = date.today()
+    today = today_()
     out = [_group_entry(r, today) for r in grp]
     out += [_individual_entry(r, today) for r in ind]
     out.sort(key=lambda e: (e["days_until_due"] is None, e["days_until_due"] or 0))

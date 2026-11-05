@@ -7,8 +7,8 @@ must escalate anything sensitive to a human.
 
 from __future__ import annotations
 
-from datetime import date
 
+from bot.db import payments
 from config import settings
 
 # Topics we never auto-answer — drafts go to the manager for approval instead.
@@ -220,25 +220,72 @@ GROUP_DISCONNECT_GUIDANCE = (
 
 # Appended only for customers on an INDIVIDUAL or DUO plan. If their subscription
 # fell off and they say they've paid, they don't need the manager — the purchase
-# bot now has a one-tap "🔌 Переподключить" button that files the reconnect request
-# itself (gated to active+paid clients). So we give the steps instead of punting
-# with the call-manager marker. Button labels mirror the main bot exactly.
-INDIVIDUAL_RECONNECT_GUIDANCE = (
+# bot has a one-tap "🔌 Переподключить" button that files the reconnect request
+# itself. So we give the steps instead of punting with the call-manager marker.
+# Button labels mirror the main bot exactly.
+#
+# The button is gated in the main bot (reconnect_eligibility in
+# handlers/individual_clients.py): active, not overdue, and at least
+# MIN_RECONNECT_PAID_DAYS paid days left. Keep this constant in sync with
+# RECONNECT_MIN_PAID_DAYS there. We decide eligibility here in code and tell the
+# model the verdict, rather than asking it to do date arithmetic.
+MIN_RECONNECT_PAID_DAYS = 10
+
+_RECONNECT_INTRO = (
     "ВАЖНО (у клиента ИНДИВИДУАЛЬНАЯ или Duo подписка): если клиент пишет, что его "
-    "подписка отключилась / слетела / перестала работать И что он уже оплатил "
-    "(или его подписка активна и оплачена) — это НЕ повод передавать вопрос "
-    f"менеджеру, маркер {CALL_MANAGER_MARKER} в этом случае НЕ ставь. Переподключение "
-    "теперь делается в один тап через бота — спокойно подскажи, как отправить "
-    "заявку на переподключение:\n"
-    f"1) Открыть бота @{settings.purchase_bot_username} и нажать кнопку "
-    "«🔌 Переподключить» (она внизу на клавиатуре и под сообщением «📊 Мой статус»).\n"
-    "2) Проверить свой Spotify-логин и нажать «✅ Отправить заявку» (или «✏️ Изменить "
-    "логин и пароль», если данные поменялись).\n"
-    "3) Менеджер переподключит в ближайшее время.\n"
-    "Кнопка работает, только если подписка активна и оплачена. Если у клиента "
-    "оплата просрочена — сначала помоги оплатить, переподключение станет доступно "
-    "после оплаты. Сам оплату не подтверждай и не обещай мгновенное подключение."
+    "подписка отключилась / слетела / перестала работать / не отображается в Spotify — "
+    "это НЕ повод передавать вопрос менеджеру, маркер {marker} в этом случае НЕ ставь. "
 )
+
+_RECONNECT_STEPS = (
+    "Переподключение делается через бота — спокойно подскажи, как отправить "
+    "заявку на переподключение:\n"
+    "1) Открыть бота @{bot} и отправить ему команду /start — так обновится "
+    "клавиатура и появится кнопка «🔌 Переподключить» (без /start у клиента может "
+    "остаться старая клавиатура без этой кнопки).\n"
+    "2) Нажать «🔌 Переподключить» (кнопка внизу на клавиатуре и под сообщением "
+    "«📊 Мой статус»).\n"
+    "3) Проверить свой Spotify-логин и нажать «✅ Отправить заявку» (или «✏️ Изменить "
+    "логин и пароль», если данные поменялись).\n"
+    "4) Менеджер переподключит в ближайшее время.\n"
+    "Обязательно упомяни шаг с /start. Если клиент пишет, что кнопки нет — "
+    "попроси отправить боту /start, после этого кнопка появится."
+)
+
+_RECONNECT_FEW_DAYS = (
+    "СЕЙЧАС ПЕРЕПОДКЛЮЧЕНИЕ НЕДОСТУПНО: до конца оплаченного периода осталось "
+    "{left} дн., а переподключиться можно, только если оплачено ещё минимум "
+    "{min_days} дн. Объясни это клиенту и предложи сначала оплатить следующий месяц "
+    "в боте @{bot} (кнопка «💳 Оплатить подписку»; если её не видно — отправить "
+    "боту /start). После того как оплату подтвердят, станет доступна кнопка "
+    "«🔌 Переподключить» в боте. НЕ отправляй клиента нажимать «🔌 Переподключить» "
+    "прямо сейчас — бот откажет."
+)
+
+_RECONNECT_OVERDUE = (
+    "СЕЙЧАС ПЕРЕПОДКЛЮЧЕНИЕ НЕДОСТУПНО: оплата просрочена. Сначала помоги клиенту "
+    "оплатить (в боте @{bot}, кнопка «💳 Оплатить подписку»; если её не видно — "
+    "отправить боту /start). Переподключение станет доступно после того, как оплату "
+    "подтвердят, и только если будет оплачено минимум {min_days} дн. вперёд."
+)
+
+_RECONNECT_FOOTER = " Сам оплату не подтверждай и не обещай мгновенное подключение."
+
+
+def individual_reconnect_guidance(entry: dict) -> str:
+    """Reconnect guidance for one individual/duo entry, matching the main bot's gate."""
+    bot = settings.purchase_bot_username
+    days = entry.get("days_until_due")
+    text = _RECONNECT_INTRO.format(marker=CALL_MANAGER_MARKER)
+    if days is None or days < 0:
+        text += _RECONNECT_OVERDUE.format(bot=bot, min_days=MIN_RECONNECT_PAID_DAYS)
+    elif days < MIN_RECONNECT_PAID_DAYS:
+        text += _RECONNECT_FEW_DAYS.format(
+            bot=bot, left=days, min_days=MIN_RECONNECT_PAID_DAYS
+        )
+    else:
+        text += _RECONNECT_STEPS.format(bot=bot)
+    return text + _RECONNECT_FOOTER
 
 
 def _when_phrase(d: int | None, npd) -> str:
@@ -268,7 +315,7 @@ def build_context_block(status: dict | None) -> str:
     lines = ["ДАННЫЕ КЛИЕНТА:"]
     name = status.get("first_name") or "клиент"
     lines.append(f"- Имя: {name}")
-    today = date.today()
+    today = payments.today_()
     for e in status.get("entries", []):
         when = _when_phrase(e["days_until_due"], e["next_payment_date"])
         # "группа 132" already reads as a label; individual/duo carry their own.
@@ -294,8 +341,12 @@ def build_context_block(status: dict | None) -> str:
                                            SEGMENT_OBJECTIVE["unknown"]))
     if any(e.get("kind") == "group" for e in status.get("entries", [])):
         lines.append(GROUP_DISCONNECT_GUIDANCE)
-    if any(e.get("kind") in ("individual", "duo") for e in status.get("entries", [])):
-        lines.append(INDIVIDUAL_RECONNECT_GUIDANCE)
+    individual = [e for e in status.get("entries", []) if e.get("kind") in ("individual", "duo")]
+    if individual:
+        # The main bot gates reconnect on the user's newest active
+        # individual_clients row (get_individual_client_by_user_id); match it.
+        best = max(individual, key=lambda e: e.get("client_id") or 0)
+        lines.append(individual_reconnect_guidance(best))
     return "\n".join(lines)
 
 
